@@ -6,7 +6,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-BIN="$ROOT/bin/fv2d"
+BIN="$ROOT/bin/scuffs"
 
 if [ $# -lt 1 ]; then
   echo "usage: $0 examples/<case> [solver options]"

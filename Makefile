@@ -1,5 +1,5 @@
-# Build the 2D finite-volume solver
-#   make            optimised build -> bin/fv2d
+# Build SCUFFS (Structured Compressible Upwind Flow Finite-volume Solver)
+#   make            optimised build -> bin/scuffs
 #   make debug      bounds checking + backtraces
 #   make clean      remove build/ and bin/
 # Override the compiler or flags on the command line, e.g. make FC=ifx FFLAGS=-O3
@@ -11,7 +11,7 @@ DEBUGFLAGS = -O0 -g -fbacktrace -fcheck=all -Wall
 SRCDIR   = src
 BUILDDIR = build
 BINDIR   = bin
-TARGET   = $(BINDIR)/fv2d
+TARGET   = $(BINDIR)/scuffs
 
 SRCS = $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/main.f90
 OBJS = $(patsubst $(SRCDIR)/%.f90,$(BUILDDIR)/%.o,$(SRCS))

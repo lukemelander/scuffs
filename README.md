@@ -1,6 +1,8 @@
-# fv2d: 2D finite-volume solver for compressible flow
+# SCUFFS
 
-A first-order, cell-centred finite-volume solver for the 2D Euler and
+**S**tructured **C**ompressible **U**pwind **F**low **F**inite-volume **S**olver
+
+SCUFFS is a first-order, cell-centred finite-volume solver for the 2D Euler and
 thin-layer Navier–Stokes equations on structured (i, j) grids, written in
 Fortran 90. It was written for a graduate course on finite-volume methods for
 hypersonic CFD and later cleaned up and debugged.
@@ -31,7 +33,7 @@ hypersonic CFD and later cleaned up and debugged.
 Requires a Fortran compiler (gfortran by default) and `make`.
 
 ```
-make            # optimised build -> bin/fv2d
+make            # optimised build -> bin/scuffs
 make debug      # -O0 with bounds checking and backtraces
 make clean
 make FC=ifx FFLAGS=-O3   # different compiler or flags
@@ -52,7 +54,7 @@ passed on to the solver.
 The solver can also be run directly:
 
 ```
-bin/fv2d --input path/to/input.inp --grid path/to/grid.dat
+bin/scuffs --input path/to/input.inp --grid path/to/grid.dat
 ```
 
 | Option | Meaning |

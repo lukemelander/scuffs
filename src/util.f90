@@ -75,7 +75,7 @@ contains
 
    subroutine print_usage()
    implicit none
-    print '(A)','Usage: fv2d [--input FILE] [--grid FILE]'
+    print '(A)','Usage: scuffs [--input FILE] [--grid FILE]'
     print '(A)','  -i, --input FILE   input file (default: input.inp)'
     print '(A)','  -g, --grid FILE    grid file (default: picked from the case type'
     print '(A)','                     in the input file, e.g. 4 -> plate.dat)'
@@ -108,7 +108,7 @@ contains
    character(LEN=2) :: dum2
    integer*8 :: i,j,k 
    real*8 :: tt
-      print*,'2D CFD Solver'
+      print*,'SCUFFS: Structured Compressible Upwind Flow Finite-volume Solver'
       print*,'    1st order inviscid fluxes'
 
       if(ivisc == 0) then
