@@ -1,0 +1,13 @@
+# build products
+build/
+bin/
+*.o
+*.mod
+a.out
+
+# solver outputs
+data.dat
+residual.dat
+checkdf.dat
+run.log
+*.vtk

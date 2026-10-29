@@ -1,0 +1,6 @@
+0 0 0              !ivisc, impl, cfl_ramp
+1000.0 0.0071 0.0  !p_inf rho_inf M_inf (gas at rest)
+0 50 10            !case type, iterations, save interval
+0.4d0              !CFL
+4,4,3,3            !BCs at i=nx, i=1, j=ny, j=1 (1=inflow 2=outflow 3=slip wall 4=mirror 5=adiabatic wall)
+2                  !initial condition (2 = shock tube: lower half at 2x p and rho)
