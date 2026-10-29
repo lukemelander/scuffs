@@ -1,10 +1,10 @@
 # SCUFFS
 
-**S**tructured **C**ompressible **U**pwind **F**low **F**inite-volume **S**olver
+**S**erial **C**ompressible **F**low **F**inite-volume **S**olver
 
 SCUFFS is a first-order, cell-centred finite-volume solver for the 2D Euler and
 thin-layer Navier–Stokes equations on structured (i, j) grids, written in
-Fortran 90. It was written for a graduate course on finite-volume methods for
+Fortran 90, and not parallelized. It was written for a graduate course on finite-volume methods for
 hypersonic CFD and later cleaned up and debugged.
 
 - Inviscid fluxes: modified Steger–Warming (MSW) flux-vector splitting with
