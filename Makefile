@@ -13,7 +13,7 @@ BUILDDIR = build
 BINDIR   = bin
 TARGET   = $(BINDIR)/scuffs
 
-SRCS = $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/main.f90
+SRCS = $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/mesh.f90 $(SRCDIR)/main.f90
 OBJS = $(patsubst $(SRCDIR)/%.f90,$(BUILDDIR)/%.o,$(SRCS))
 
 all: $(TARGET)
@@ -25,9 +25,9 @@ $(TARGET): $(OBJS) | $(BINDIR)
 $(BUILDDIR)/%.o: $(SRCDIR)/%.f90 | $(BUILDDIR)
 	$(FC) $(FFLAGS) -J$(BUILDDIR) -c $< -o $@
 
-# Module dependencies: util -> solver -> main
+# Module dependencies: util -> solver -> main, mesh -> main
 $(BUILDDIR)/solver.o: $(BUILDDIR)/util.o
-$(BUILDDIR)/main.o: $(BUILDDIR)/util.o $(BUILDDIR)/solver.o
+$(BUILDDIR)/main.o: $(BUILDDIR)/util.o $(BUILDDIR)/solver.o $(BUILDDIR)/mesh.o
 
 $(BUILDDIR) $(BINDIR):
 	mkdir -p $@

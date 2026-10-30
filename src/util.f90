@@ -20,12 +20,15 @@ integer :: switch
 !File names, set from the command line (see parse_args)
 character(len=256) :: input_file = 'input.inp'
 character(len=256) :: grid_file = ''
+!--mesh-check: read and check an SU2 mesh, write VTK files, stop
+logical :: mesh_check = .false.
 contains
    subroutine parse_args()
    !Reads command-line options:
    !  --input FILE / -i FILE / --input=FILE   input file (default input.inp)
    !  --grid FILE  / -g FILE / --grid=FILE    grid file (default: from the
    !                                          case type in the input file)
+   !  --mesh-check                          check an SU2 mesh and stop
    !  --help / -h
    implicit none
    integer :: i,nargs,eq
@@ -61,6 +64,8 @@ contains
         else
           grid_file = val
         endif
+      case('--mesh-check')
+        mesh_check = .true.
       case('--help','-h')
         call print_usage()
         stop
@@ -79,6 +84,8 @@ contains
     print '(A)','  -i, --input FILE   input file (default: input.inp)'
     print '(A)','  -g, --grid FILE    grid file (default: picked from the case type'
     print '(A)','                     in the input file, e.g. 4 -> plate.dat)'
+    print '(A)','      --mesh-check   read the SU2 mesh given by --grid, check it,'
+    print '(A)','                     write mesh.vtk and mesh_boundary.vtk, then stop'
     print '(A)','  -h, --help         show this message'
    end subroutine
 

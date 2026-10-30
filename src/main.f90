@@ -1,6 +1,7 @@
 program main
    use utilities
    use solver
+   use mesh, only: mesh_setup, write_mesh_vtk, write_boundary_vtk
    implicit none
    integer*8 :: i,j,k
    real*8 :: a,ttot
@@ -13,6 +14,18 @@ program main
    
    !Command-line options (--input, --grid)
    call parse_args()
+
+   !Mesh check mode: read an SU2 mesh, check it, write VTK files and stop
+   if(mesh_check) then
+     if(len_trim(grid_file) == 0) then
+       print*,'--mesh-check needs a mesh file: --grid FILE.su2'
+       stop 1
+     endif
+     call mesh_setup(trim(grid_file))
+     call write_mesh_vtk('mesh.vtk')
+     call write_boundary_vtk('mesh_boundary.vtk')
+     stop
+   endif
 
    !Reading in input and grid files
    call check_file(input_file)
