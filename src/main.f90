@@ -1,162 +1,89 @@
 program main
+!-----------------------------------------------------------------------
+! SCUFFS: Shock-capturing Compressible Unstructured Finite-volume Flow Solver
+! 2D, cell-centred, first order, on unstructured (triangle/quad) meshes.
+!
+!   scuffs --grid MESH.su2 [--input input.inp]
+!   scuffs --grid MESH.su2 --mesh-check
+!-----------------------------------------------------------------------
+   use mesh
    use utilities
    use solver
-   use mesh, only: mesh_setup, write_mesh_vtk, write_boundary_vtk
    implicit none
-   integer*8 :: i,j,k
-   real*8 :: a,ttot
-   !Read in variables
-   integer*8 :: ivers, nb,cn,fi,cflramp
-   real*8 :: th, c
-   real*8 :: dt,Fc(4),Uc(2,4),V(4),np(2,2)
-   real*8 :: dym,dxm,res,aa,aoa,w,dk(4)
-   real*8, allocatable :: U1(:,:,:),U2(:,:,:)
-   
-   !Command-line options (--input, --grid)
-   call parse_args()
+   integer :: it
+   real*8 :: dt,ttot,res
+   real*8, allocatable :: U1(:,:),U2(:,:)
 
-   !Mesh check mode: read an SU2 mesh, check it, write VTK files and stop
+   !Command-line options
+   call parse_args()
+   if(len_trim(grid_file) == 0) then
+     print*,'A mesh file is required: --grid FILE.su2'
+     call print_usage()
+     stop 1
+   endif
+   call check_file(grid_file)
+
+   !Mesh
+   call mesh_setup(trim(grid_file))
+
+   !Mesh check mode: write VTK files of the mesh and stop
    if(mesh_check) then
-     if(len_trim(grid_file) == 0) then
-       print*,'--mesh-check needs a mesh file: --grid FILE.su2'
-       stop 1
-     endif
-     call mesh_setup(trim(grid_file))
      call write_mesh_vtk('mesh.vtk')
      call write_boundary_vtk('mesh_boundary.vtk')
      stop
    endif
 
-   !Reading in input and grid files
-   call check_file(input_file)
+   !Input file (needs the mesh's marker names)
    print*,'Input file: ',trim(input_file)
-   open(unit=10,file=trim(input_file),status='old',action='read')
-     read(10,*) ivisc, impl, cflramp
-     read(10,*) fs(2),fs(3),fs(1)
-     read(10,*) stype, iter, isave
-     read(10,*) CFL
-     read(10,*) bcs(1),bcs(2),bcs(3),bcs(4)
-     read(10,*) switch
-   close(10)
+   call read_input(input_file)
+   if(ivisc == 1) then
+     print*,'Viscous flow is not available yet on unstructured meshes (roadmap step A6).'
+     print*,'Set ivisc = 0 in the input file.'
+     stop 1
+   endif
+   call init_gas()
 
-   call init()
-   !Computing grid metrics and connectivity
-      print*,'Computing grid metrics and connectivity'
-       allocate(cxy(nx+1,ny+1,2))                    !Cell center xy coords array
-       allocate(dxy(nx+1,ny+1))    !df = face derivatives, dxy = volume
-       fnum = nx*(ny-1)+ny*(nx-1)
-       allocate(nfc(fnum,2,2),bclist(fnum))
-       fi = 1
-       do j = 2,ny
-       do i = 1,nx
-        nfc(fi,1,1) = i
-        nfc(fi,1,2) = j
-        nfc(fi,2,1) = i+1
-        nfc(fi,2,2) = j
-        if(i==1) then
-          bclist(fi) = bcs(2)
-        elseif(i==nx) then
-          bclist(fi) = bcs(1)
-        else
-          bclist(fi) = 0
-        endif
-        fi = fi+1
-       enddo
-       enddo
-       do i = 2,nx
-       do j = 1,ny
-        nfc(fi,1,1) = i
-        nfc(fi,1,2) = j
-        nfc(fi,2,1) = i
-        nfc(fi,2,2) = j+1
-        if(j==1) then
-          if(stype == 4) then
-            if(i .GE. iplate) then
-              bclist(fi) = bcs(4)
-            else
-              bclist(fi) = 3
-            endif
-          else 
-           bclist(fi) = bcs(4)
-          endif 
-        elseif(j==ny) then
-          bclist(fi) = bcs(3)
-        else
-          bclist(fi) = 0
-        endif
-        fi = fi+1
-       enddo
-       enddo
+   !Initial condition. U holds the real cells followed by one ghost cell
+   !per boundary face.
+   allocate(U1(4,ncell+nbface),U2(4,ncell+nbface))
+   iblend = 1
+   call init_flow(U1)
+   U2 = U1
+   ttot = 0.0d0
+   res = 0.0d0
 
-       allocate(ncf(nx+1,ny+1,4))
-       fi = 1
-       do j = 2,ny
-       do i = 2,nx
-        ncf(i,j,1) = fi
-        ncf(i,j,2) = fi+1
-        fi = fi+1
-       enddo
-       fi=fi+1
-       enddo
-       do i = 2,nx
-       do j = 2,ny
-         ncf(i,j,3) = fi
-         ncf(i,j,4) = fi+1
-         fi = fi+1
-       enddo
-       fi = fi+1
-       enddo
-       print*,'   faces: ',fnum
+   print*,'...starting iterations'
+   open(unit=99,file='residual.dat',action='write',status='replace')
 
-      call build_metrics()
-      print*,'done'
-     
-   !Step 3: Init flow, call main solver subroutine (using read in case # from input file)
-      print*,'...Initializing flow'
-       allocate(U1(nx+1,ny+1,4),U2(nx+1,ny+1,4))
-       dt = 1.0d0
-       ttot = 0.0d0
-       iblend = 1
-       call init_flow(U1) 
-       call init_flow(U2)
-       call get_dt(U1,dt,CFL)
-      print*,'done'
+   do it = 1,iter
+     if(cflramp == 1) call cfl_ramp(it,CFL)
+     call get_dt(U1,dt)
+     if(impl == 0) then
+       call solver_exp(dt,U1,U2)
+     else
+       call solver_impl(dt,U1,U2)
+     endif
+     call calc_res(U1,U2,res)
+     ttot = ttot + dt
 
-      print*,'...starting iterations'
-       open(unit=99,file='residual.dat',action='write')
+     !Stop if the run diverged
+     if(isnan(res)) exit
+     print*,it,ttot,CFL,dt,res
+     write(99,*) it,res
 
-       !Main solver loop       
-       do i = 1,iter
-         if(cflramp==1) then
-          call cfl_ramp(i,dt,CFL)
-         endif
-         call get_dt(U1,dt,CFL)
-         if(impl == 0) then
-          call solver_exp(dt,U1,U2)
-         elseif(impl == 1) then
-          call solver_impl(dt,U1,U2)
-         endif   
-         call calc_res(U1,U2,res)
-         ttot = ttot+dt
+     if(modulo(it,isave) == 0) then
+       call write_solution_vtk(U2,'data.vtk')
+       print*,'saved to data.vtk'
+     endif
+     !Real cells and ghosts (outflow ghost states carry over)
+     U1 = U2
+   enddo
+   close(99)
 
-         !Checking for nan or finished
-         if(isnan(res) .EQV. .TRUE.) exit
-         print*,i,ttot,cfl,dt,res
-         write(99,*) i,res
-
-         !Writing out soln
-         if(modulo(i,isave) == 0) then
-            call write_vars(U2,'data.dat')
-            print*,"saved to data.dat"
-         endif
-         U1(1:nx+1,1:ny+1,:) = U2(1:nx+1,1:ny+1,:)
-       enddo
-       close(99)
-
-       !Write the final solution (unless the run diverged)
-       if(.NOT. isnan(res)) then
-          call write_vars(U1,'data.dat')
-          print*,"final solution saved to data.dat"
-       endif
-      print*,'...done'
+   !Final solution (unless the run diverged)
+   if(.NOT. isnan(res)) then
+     call write_solution_vtk(U1,'data.vtk')
+     print*,'final solution saved to data.vtk'
+   endif
+   print*,'...done'
 end program

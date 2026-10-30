@@ -1,6 +1,11 @@
 1 0 0              !ivisc, impl, cfl_ramp
 1000.0 0.0071 1.5  !p_inf rho_inf M_inf
-4 50000 5000       !case type, iterations, save interval
+50000 5000         !iterations, save interval
 0.4d0              !CFL
-2,1,4,5            !BCs at i=nx, i=1, j=ny, j=1 (1=inflow 2=outflow 3=slip wall 4=mirror 5=adiabatic wall)
-1                  !initial condition (1=freestream 2=shock tube 3=perturbed freestream)
+5                  !number of boundary markers
+inlet    1         !marker name, BC type (1 inflow 2 outflow 3 slip wall 4 mirror 5 adiabatic wall)
+outlet   2
+symmetry 3
+plate    5
+top      4
+1                  !initial condition (1 freestream, 2 shock tube, 3 perturbed freestream)

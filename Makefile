@@ -1,4 +1,4 @@
-# Build SCUFFS (Structured Compressible Upwind Flow Finite-volume Solver)
+# Build SCUFFS (Shock-capturing Compressible Unstructured Finite-volume Flow Solver)
 #   make            optimised build -> bin/scuffs
 #   make debug      bounds checking + backtraces
 #   make clean      remove build/ and bin/
@@ -13,7 +13,7 @@ BUILDDIR = build
 BINDIR   = bin
 TARGET   = $(BINDIR)/scuffs
 
-SRCS = $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/mesh.f90 $(SRCDIR)/main.f90
+SRCS = $(SRCDIR)/mesh.f90 $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/main.f90
 OBJS = $(patsubst $(SRCDIR)/%.f90,$(BUILDDIR)/%.o,$(SRCS))
 
 all: $(TARGET)
@@ -25,9 +25,10 @@ $(TARGET): $(OBJS) | $(BINDIR)
 $(BUILDDIR)/%.o: $(SRCDIR)/%.f90 | $(BUILDDIR)
 	$(FC) $(FFLAGS) -J$(BUILDDIR) -c $< -o $@
 
-# Module dependencies: util -> solver -> main, mesh -> main
-$(BUILDDIR)/solver.o: $(BUILDDIR)/util.o
-$(BUILDDIR)/main.o: $(BUILDDIR)/util.o $(BUILDDIR)/solver.o $(BUILDDIR)/mesh.o
+# Module dependencies: mesh -> util -> solver -> main
+$(BUILDDIR)/util.o: $(BUILDDIR)/mesh.o
+$(BUILDDIR)/solver.o: $(BUILDDIR)/util.o $(BUILDDIR)/mesh.o
+$(BUILDDIR)/main.o: $(BUILDDIR)/mesh.o $(BUILDDIR)/util.o $(BUILDDIR)/solver.o
 
 $(BUILDDIR) $(BINDIR):
 	mkdir -p $@

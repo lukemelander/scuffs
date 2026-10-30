@@ -1,4 +1,14 @@
 module utilities
+!-----------------------------------------------------------------------
+! Gas properties, run settings, command-line options, and helpers shared
+! by the solver: state conversions, time step, residual, CFL ramp,
+! solution output and small matrix routines.
+!
+! Cell states are stored as U(4, ncell+nbface): conserved variables
+! (rho, rho*u, rho*v, rho*E) for each real cell, followed by one ghost
+! cell per boundary face (see the mesh module).
+!-----------------------------------------------------------------------
+use mesh
 implicit none
 real*8, parameter :: pi = acos(-1.0d0)
 real*8, parameter :: gam = 1.4d0
@@ -8,15 +18,20 @@ real*8, parameter :: Pr = 0.7d0
 real*8, parameter :: cv = (5.0d0/2.0d0)*Rair
 !Implicit solver: kmax+1 point-Jacobi sweeps per iteration
 !(10 sweeps needed for stability at CFL ~50-100)
-integer*8, parameter :: kmax = 9
-!First wall face (cell index i) of the flat plate, stype = 4
-integer*8, parameter :: iplate = 11
-real*8, allocatable :: nxy(:,:,:), cxy(:,:,:), df(:,:),dxy(:,:),ndf(:,:)
+integer, parameter :: kmax = 9
+
+!Boundary-condition types
+integer, parameter :: BC_INFLOW = 1, BC_OUTFLOW = 2, BC_SLIPWALL = 3
+integer, parameter :: BC_MIRROR = 4, BC_ADIABATIC = 5
+
+!Freestream (fs = Mach, p, rho), run settings
 real*8 :: fs(3),CFL,Id(4,4)
-real*8 :: Kq, mu,lamu
-integer*8, allocatable :: ncf(:,:,:), nfc(:,:,:),bclist(:)
-integer*8 :: stype,iblend,impl,ivisc,nx,ny,bcs(4),iter,isave,fnum
+real*8 :: Kq,mu,lamu
+integer :: iblend,impl,ivisc,iter,isave,cflramp
 integer :: switch
+!BC type of each mesh marker (filled from the input file)
+integer, allocatable :: mbc(:)
+
 !File names, set from the command line (see parse_args)
 character(len=256) :: input_file = 'input.inp'
 character(len=256) :: grid_file = ''
@@ -26,9 +41,8 @@ contains
    subroutine parse_args()
    !Reads command-line options:
    !  --input FILE / -i FILE / --input=FILE   input file (default input.inp)
-   !  --grid FILE  / -g FILE / --grid=FILE    grid file (default: from the
-   !                                          case type in the input file)
-   !  --mesh-check                          check an SU2 mesh and stop
+   !  --grid FILE  / -g FILE / --grid=FILE    SU2 mesh file (required)
+   !  --mesh-check                            check an SU2 mesh and stop
    !  --help / -h
    implicit none
    integer :: i,nargs,eq
@@ -80,12 +94,11 @@ contains
 
    subroutine print_usage()
    implicit none
-    print '(A)','Usage: scuffs [--input FILE] [--grid FILE]'
+    print '(A)','Usage: scuffs --grid MESH.su2 [--input FILE] [--mesh-check]'
+    print '(A)','  -g, --grid FILE    SU2 mesh file (required)'
     print '(A)','  -i, --input FILE   input file (default: input.inp)'
-    print '(A)','  -g, --grid FILE    grid file (default: picked from the case type'
-    print '(A)','                     in the input file, e.g. 4 -> plate.dat)'
-    print '(A)','      --mesh-check   read the SU2 mesh given by --grid, check it,'
-    print '(A)','                     write mesh.vtk and mesh_boundary.vtk, then stop'
+    print '(A)','      --mesh-check   check the mesh, write mesh.vtk and'
+    print '(A)','                     mesh_boundary.vtk, then stop'
     print '(A)','  -h, --help         show this message'
    end subroutine
 
@@ -101,440 +114,288 @@ contains
     endif
    end subroutine
 
-   subroutine init()
+   subroutine read_input(fname)
+   !Input file (list-directed; anything after the values on a line is a
+   !comment):
+   !  ivisc impl cfl_ramp
+   !  p_inf rho_inf M_inf
+   !  iterations save_interval
+   !  CFL
+   !  nbc                       number of boundary lines that follow
+   !  marker_name bc_type       (nbc lines)
+   !  initial_condition
+   !The mesh must already be loaded, so marker names can be checked.
    implicit none
-   character(LEN=256) :: fname
-   character(LEN=10), parameter :: fname0='block.dat'
-   character(LEN=10), parameter :: fname1='ramp.dat'
-   character(LEN=10), parameter :: fname2='rampb.dat'
-   character(LEN=10), parameter :: fname3='cyl.dat'
-   character(LEN=10), parameter :: fname4='plate.dat'
-   character(LEN=15),dimension(4) :: bcn
-   character(LEN=17) :: dum3
-   character(LEN=7) :: dum1
-   character(LEN=2) :: dum2
-   integer*8 :: i,j,k 
-   real*8 :: tt
-      print*,'SCUFFS: Structured Compressible Upwind Flow Finite-volume Solver'
-      print*,'    1st order inviscid fluxes'
-
-      if(ivisc == 0) then
-       print*,'    inviscid flow'
-      else
-       print*,'    viscous flow'
-      endif
-
-      if(impl == 0) then
-       print*,'    1st order explicit time integration'
-      else
-       print*,'    1st order implicit time integration'
-      endif
-      fname = ''
-      if(stype == 0) then
-       fname = fname0
-       print*,'    Block'
-      elseif(stype == 1) then
-       fname = fname1
-       print*,'    Channel with Ramp'
-      elseif(stype == 2) then
-       fname = fname2
-       print*,'    Channel with Ramp (shock aligned grid)'
-      elseif(stype == 3) then
-       fname = fname3
-       print*,'    Cylinder'
-      elseif(stype == 4) then
-       fname = fname4
-       print*,'    Flat Plate'
-      endif
-
-      do k = 1,4
-       if(bcs(k) == 1) then
-        bcn(k) = 'inflow'
-       elseif(bcs(k) == 2) then
-        bcn(k) = 'outflow'
-       elseif(bcs(k) == 3) then
-        bcn(k) = 'inviscid wall'
-       elseif(bcs(k) == 4) then
-        bcn(k) = 'mirror'
-       elseif(bcs(k) == 5) then
-        bcn(k) = 'adiabatic wall'
-       endif
-      enddo
-
-      !A grid given on the command line overrides the default for stype
-      if(len_trim(grid_file) > 0) fname = grid_file
-      if(len_trim(fname) == 0) then
-        print*,'No grid file: give one with --grid or use case type 0-4'
+   character(len=*), intent(in) :: fname
+   integer, parameter :: un = 10
+   integer :: nbc,k,m,btype
+   character(len=64) :: bname
+    call check_file(fname)
+    open(unit=un,file=trim(fname),status='old',action='read')
+    read(un,*) ivisc, impl, cflramp
+    read(un,*) fs(2), fs(3), fs(1)
+    read(un,*) iter, isave
+    read(un,*) CFL
+    read(un,*) nbc
+    allocate(mbc(nmark))
+    mbc = 0
+    do k = 1,nbc
+      read(un,*) bname, btype
+      m = marker_id(bname)
+      if(m == 0) then
+        print*,'Input error: marker "',trim(bname),'" is not in the mesh. Mesh markers:'
+        do m = 1,nmark
+          print*,'   ',trim(markname(m))
+        enddo
         stop 1
       endif
-      call check_file(fname)
-      print*,'    Grid file: ',trim(fname)
-      open(unit=20,file=trim(fname),status='old',action='read')
-      read(20,*)
-      read(20,*) dum1,dum2,nx,dum2,ny
-       allocate(nxy(nx,ny,2))
-      read(20,*) ((nxy(i,j,1),i=1,nx),j=1,ny)
-      read(20,*) ((nxy(i,j,2),i=1,nx),j=1,ny)
-      close(20)
-      print*, 'Read in grid'
-      print*,'    Nx =',nx
-      print*,'    Ny =',ny
-      print*,'    BCs:'
-      print*,'      i=1 ,',bcn(2)
-      print*,'      i=Nx,',bcn(1)
-      print*,'      j=1 ,',bcn(4)
-      print*,'      j=Ny,',bcn(3)
- 
-      print*,'-----------------------------'
-      print*,'Freestream flow'
-      print*,'   Mach #=',fs(1)
-      print*,'   Rho =',fs(3)
-      print*,'   P =',fs(2)
-      print*,'   U =',fs(1)*(sqrt(gam*fs(2)/fs(3)))
- 
-      !Deriving some useful quantities
-      Id(:,:) = 0.0d0
-      do k = 1,4
-        Id(k,k) = 1.0d0
-      enddo
-      Tt = fs(2)/(Rair*fs(3))
-      mu = (1.458d-6)*(tt**1.5d0)/(tt+110.4d0)
-      lamu = -(2.0d0/3.0d0)*mu
-      Kq = gam*mu*cv/Pr
-      print*,'Gas Properties:'
-      print*,'   Temp: ',Tt
-      print*,'   Dynamic Viscosity: ',mu
-      print*,'   Thermal conductivity: ',Kq
-      print*,'-----------------------------'
-      print*,'Running for',iter,' iterations' 
-  end subroutine
+      if(btype < 1 .OR. btype > 5) then
+        print*,'Input error: BC type for marker "',trim(bname),'" must be 1-5'
+        stop 1
+      endif
+      mbc(m) = btype
+    enddo
+    read(un,*) switch
+    close(un)
+    do m = 1,nmark
+      if(mbc(m) == 0) then
+        print*,'Input error: no boundary condition given for marker "',trim(markname(m)),'"'
+        stop 1
+      endif
+    enddo
+    if(isave < 1) isave = iter
+   end subroutine
 
-   subroutine cfl_ramp(itr,dt,cfl)
+   subroutine init_gas()
+   !Derived gas properties and a summary of the run
    implicit none
-   integer*8, intent(in) :: itr
-   real*8, intent(inout) :: cfl,dt
-   integer*8 :: cflnum,i,j,k
-   real*8, allocatable :: cfl_list(:)
-   integer*8, allocatable :: cfl_iter(:)
-   cflnum = 9
-   allocate(cfl_iter(cflnum),cfl_list(cflnum))
-   cfl_iter(1) = 1
-   cfl_list(1) = 0.4d0  
-   cfl_iter(2) = 20
-   cfl_list(2) = 0.8d0
-   cfl_iter(3) = 30
-   cfl_list(3) = 1.6d0
-   cfl_iter(4) = 40
-   cfl_list(4) = 3.2d0
-   cfl_iter(5) = 500
-   cfl_list(5) = 6.4d0
-   cfl_iter(6) = 700
-   cfl_list(6) = 12.8d0
-   cfl_iter(7) = 1000
-   cfl_list(7) = 25.6d0   
-   cfl_iter(8) = 1250
-   cfl_list(8) = 50.0d0
-   cfl_iter(9) = 1500
-   cfl_list(9) = 100.0d0
+   integer :: k,m
+   real*8 :: tt
+   character(len=15) :: bcn(5)
+    bcn = (/'inflow        ','outflow       ','slip wall     ','mirror        ', &
+            'adiabatic wall'/)
+    print*,'SCUFFS: Shock-capturing Compressible Unstructured Finite-volume Flow Solver'
+    print*,'    1st order inviscid fluxes (MSW)'
+    if(ivisc == 0) then
+      print*,'    inviscid flow'
+    else
+      print*,'    viscous flow'
+    endif
+    if(impl == 0) then
+      print*,'    1st order explicit time integration'
+    else
+      print*,'    1st order implicit time integration'
+    endif
+    print*,'    Boundary conditions:'
+    do m = 1,nmark
+      print '(8X,A20,A)',markname(m),trim(bcn(mbc(m)))
+    enddo
+    print*,'-----------------------------'
+    print*,'Freestream flow'
+    print*,'   Mach #=',fs(1)
+    print*,'   Rho =',fs(3)
+    print*,'   P =',fs(2)
+    print*,'   U =',fs(1)*(sqrt(gam*fs(2)/fs(3)))
+
+    Id(:,:) = 0.0d0
+    do k = 1,4
+      Id(k,k) = 1.0d0
+    enddo
+    tt = fs(2)/(Rair*fs(3))
+    mu = (1.458d-6)*(tt**1.5d0)/(tt+110.4d0)
+    lamu = -(2.0d0/3.0d0)*mu
+    Kq = gam*mu*cv/Pr
+    print*,'Gas Properties:'
+    print*,'   Temp: ',tt
+    print*,'   Dynamic Viscosity: ',mu
+    print*,'   Thermal conductivity: ',Kq
+    print*,'-----------------------------'
+    print*,'Running for',iter,' iterations'
+   end subroutine
+
+   subroutine cfl_ramp(itr,cfl)
+   !CFL schedule for implicit steady-state runs
+   implicit none
+   integer, intent(in) :: itr
+   real*8, intent(inout) :: cfl
+   integer, parameter :: cflnum = 9
+   integer, parameter :: cfl_iter(cflnum) = (/1,20,30,40,500,700,1000,1250,1500/)
+   real*8, parameter :: cfl_list(cflnum) = &
+        (/0.4d0,0.8d0,1.6d0,3.2d0,6.4d0,12.8d0,25.6d0,50.0d0,100.0d0/)
+   integer :: i
     do i = 1,cflnum
-     if(itr == cfl_iter(i)) then
-       cfl = cfl_list(i)
-     endif
+      if(itr == cfl_iter(i)) cfl = cfl_list(i)
     enddo
-   deallocate(cfl_iter,cfl_list)
    end subroutine
 
-   subroutine build_metrics()
+   subroutine write_solution_vtk(U,fname)
+   !Cell-centred rho, u, v, p, Mach and velocity on the mesh (legacy VTK)
    implicit none
-   integer i,j,k,fi
-   real*8 :: a1,a2
-    !Building cell center array
-    do i = 2,nx
-    do j = 2,ny
-      cxy(i,j,1) = (nxy(i-1,j-1,1)+nxy(i,j-1,1)+nxy(i-1,j,1)+nxy(i,j,1))/4.0d0
-      cxy(i,j,2) = (nxy(i-1,j-1,2)+nxy(i,j-1,2)+nxy(i-1,j,2)+nxy(i,j,2))/4.0d0
-    enddo
-    enddo
-
-    do i = 2,nx
-     cxy(i,1,:) = -cxy(i,2,:) + (nxy(i,1,:) + nxy(i-1,1,:))
-     cxy(i,ny+1,:) = -cxy(i,ny,:) + (nxy(i,ny,:) + nxy(i-1,ny,:))
-    enddo
-
-    do j = 2,ny
-     cxy(1,j,:) = -cxy(2,j,:) + (nxy(1,j,:)+nxy(1,j-1,:))
-     cxy(nx+1,j,:) = -cxy(nx,j,:) + (nxy(nx,j,:)+nxy(nx,j-1,:))
+   real*8, intent(in) :: U(:,:)
+   character(len=*), intent(in) :: fname
+   integer, parameter :: un = 100
+   integer :: c,k
+   real*8 :: V(4),Uc(4)
+   real*8, allocatable :: P(:,:)
+    !primitive variables of the real cells
+    allocate(P(5,ncell))
+    do c = 1,ncell
+      Uc = U(:,c)
+      call dfromp(Uc,V,-2)
+      P(1:4,c) = V
+      P(5,c) = sqrt(V(2)**2 + V(3)**2)/sqrt(gam*V(4)/V(1))
     enddo
 
-    do i = 2,nx
-    do j = 2,ny
-
-       !Evaluating dxy
-       call calc_area(nxy(i,j,:),nxy(i-1,j-1,:),nxy(i,j-1,:),a1)
-       call calc_area(nxy(i,j,:),nxy(i-1,j-1,:),nxy(i-1,j,:),a2)
-
-       dxy(i,j) = a1 + a2
-
+    open(unit=un,file=trim(fname),status='replace',action='write')
+    write(un,'(A)') '# vtk DataFile Version 3.0'
+    write(un,'(A)') 'SCUFFS solution'
+    write(un,'(A)') 'ASCII'
+    write(un,'(A)') 'DATASET UNSTRUCTURED_GRID'
+    write(un,'(A,I0,A)') 'POINTS ',nnode,' double'
+    do k = 1,nnode
+      write(un,'(3ES24.15)') xy(1,k),xy(2,k),0.0d0
     enddo
+    write(un,'(A,I0,1X,I0)') 'CELLS ',ncell,sum(nvert)+ncell
+    do c = 1,ncell
+      write(un,'(I0,4(1X,I0))') nvert(c),(cnode(k,c)-1,k=1,nvert(c))
     enddo
-    !Getting dNu and dEta for each face
-    fi = 1
-    allocate(ndf(fnum,3),df(fnum,5))
-    do j = 1,ny-1
-    do i = 1,nx
-      !Surface Normals
-      ndf(fi,1) = nxy(i,j+1,2) - nxy(i,j,2) 
-      ndf(fi,2) = -(nxy(i,j+1,1) - nxy(i,j,1))
-      ndf(fi,3) = sqrt(ndf(fi,1)*ndf(fi,1) + ndf(fi,2)*ndf(fi,2))
-      ndf(fi,1:2) = ndf(fi,1:2)/ndf(fi,3)
-      
-      !Surface Derivatives (dx/de,dx/dn,dy/de,dy,dn)
-      df(fi,2) = nxy(i,j+1,1) - nxy(i,j,1)
-      df(fi,4) = nxy(i,j+1,2) - nxy(i,j,2)
-      if(i==1)then
-       df(fi,1) = 0.5d0*((nxy(i+1,j,1)-nxy(i,j,1)) + (nxy(i+1,j+1,1)-nxy(i,j+1,1)))
-       df(fi,3) = 0.5d0*((nxy(i+1,j,2)-nxy(i,j,2)) + (nxy(i+1,j+1,2)-nxy(i,j+1,2)))
-      elseif(i==nx) then
-       df(fi,1) = 0.5d0*((nxy(i,j,1)-nxy(i-1,j,1)) + (nxy(i,j+1,1)-nxy(i-1,j+1,1)))
-       df(fi,3) = 0.5d0*((nxy(i,j,2)-nxy(i-1,j,2)) + (nxy(i,j+1,2)-nxy(i-1,j+1,2)))
+    write(un,'(A,I0)') 'CELL_TYPES ',ncell
+    do c = 1,ncell
+      if(nvert(c) == 3) then
+        write(un,'(I0)') 5
       else
-       df(fi,1) = 0.5d0*((nxy(i+1,j,1)-nxy(i-1,j,1))/2.0d0 + (nxy(i+1,j+1,1)-nxy(i-1,j+1,1))/2.0d0)
-       df(fi,3) = 0.5d0*((nxy(i+1,j,2)-nxy(i-1,j,2))/2.0d0 + (nxy(i+1,j+1,2)-nxy(i-1,j+1,2))/2.0d0)
+        write(un,'(I0)') 9
       endif
-      df(fi,5) = df(fi,1)*df(fi,4) - df(fi,2)*df(fi,3)
-      fi = fi+1
     enddo
+    write(un,'(A,I0)') 'CELL_DATA ',ncell
+    call scalar('rho',P(1,:))
+    call scalar('u',P(2,:))
+    call scalar('v',P(3,:))
+    call scalar('p',P(4,:))
+    call scalar('mach',P(5,:))
+    write(un,'(A)') 'VECTORS velocity double'
+    do c = 1,ncell
+      write(un,'(3ES24.15)') P(2,c),P(3,c),0.0d0
     enddo
-
-    do i = 1,nx-1
-    do j = 1,ny
-      !Surface normals
-      ndf(fi,1) = -(nxy(i+1,j,2) - nxy(i,j,2))
-      ndf(fi,2) = (nxy(i+1,j,1) - nxy(i,j,1))
-      ndf(fi,3) = sqrt(ndf(fi,1)*ndf(fi,1) + ndf(fi,2)*ndf(fi,2))
-      ndf(fi,1:2) = ndf(fi,1:2)/ndf(fi,3)
-
-      !Surface Derivatives
-      df(fi,1) = nxy(i+1,j,1) - nxy(i,j,1)
-      df(fi,3) = nxy(i+1,j,2) - nxy(i,j,2)
-      if(j==1)then
-       df(fi,2) = 0.5d0*((nxy(i,j+1,1)-nxy(i,j,1)) + (nxy(i+1,j+1,1)-nxy(i+1,j,1)))
-       df(fi,4) = 0.5d0*((nxy(i,j+1,2)-nxy(i,j,2)) + (nxy(i+1,j+1,2)-nxy(i+1,j,2)))
-      elseif(j==ny) then
-       df(fi,2) = 0.5d0*((nxy(i,j,1)-nxy(i,j-1,1)) + (nxy(i+1,j,1)-nxy(i+1,j-1,1)))
-       df(fi,4) = 0.5d0*((nxy(i,j,2)-nxy(i,j-1,2)) + (nxy(i+1,j,2)-nxy(i+1,j-1,2))) 
-      else
-       df(fi,2) = 0.5d0*((nxy(i,j+1,1)-nxy(i,j-1,1))/2.0d0 + (nxy(i+1,j+1,1)-nxy(i+1,j-1,1))/2.0d0)
-       df(fi,4) = 0.5d0*((nxy(i,j+1,2)-nxy(i,j-1,2))/2.0d0 + (nxy(i+1,j+1,2)-nxy(i+1,j-1,2))/2.0d0)
-      endif
-      df(fi,5) = df(fi,1)*df(fi,4) - df(fi,2)*df(fi,3)
-      fi = fi+1
-    enddo
-    enddo
-   
-   open(unit=20,file='checkdf.dat')
-   do i = 2,nx
-    write(20,*) df(ncf(i,2,3),:)
-   enddo
-   write(20,*) 'break'
-      do i = 2,nx
-    write(20,*) df(ncf(i,3,3),:)
-   enddo
-   close(20)
-   end subroutine
- 
-   subroutine calc_area(p1,p2,p3,a)
-   implicit none
-   real*8, intent(in) :: p1(:),p2(:),p3(:)
-   real*8,intent(inout) ::a
-   real*8 :: v1(2),v2(2)
-   v1 = p1(:)-p2(:)
-   v2 = p3(:)-p2(:)
-   a = abs(0.5d0*(v1(1)*v2(2) - v1(2)*v2(1)))
-
-   end subroutine
-   
-
-   subroutine write_vars(U,fname)
-   implicit none
-   integer*8 :: i,j,k
-   real*8, intent(in) :: U(:,:,:)
-   real*8, allocatable :: m(:,:),rho(:,:),uu(:,:),uv(:,:),p(:,:)
-   character(LEN=8), intent(in) :: fname
-   allocate(m(nx+1,ny+1),rho(nx+1,ny+1),uu(nx+1,ny+1),uv(nx+1,ny+1),p(nx+1,ny+1))
-   do i = 1,nx+1
-   do j = 1,ny+1
-   rho(i,j) = U(i,j,1)
-   uu(i,j) = U(i,j,2)/U(i,j,1)
-   uv(i,j) = U(i,j,3)/U(i,j,1)
-   P(i,j) =  (gam-1.0d0)*U(i,j,4) - 0.5d0*U(i,j,1)*(gam-1.0d0)*((U(i,j,2)/U(i,j,1))**2 + (U(i,j,3)/U(i,j,1))**2)
-   m(i,j) = sqrt(uu(i,j)**2.0d0 + uv(i,j)**2.0d0)/sqrt(gam*P(i,j)/rho(i,j))
-   enddo
-   enddo 
-   
-   open(unit=100,file=fname,action='write')
-   !Tecplot ASCII header (also read by ParaView's Tecplot reader):
-   !space-separated variable names, cell-centered range for vars 3-7
-   write(100,'(A)') 'VARIABLES = "X" "Y" "rho" "u" "v" "p" "m"'
-   write(100,'(A,I0,A,I0,A)') 'ZONE I=',nx,', J=',ny, &
-           ', DATAPACKING=BLOCK, VARLOCATION=([3-7]=CELLCENTERED)'
-   do j =1,ny
-      write(100,*) (nxy(i,j,1),i=1,nx)
-   enddo
-   do j=1,ny
-      write(100,*) (nxy(i,j,2),i=1,nx)
-   enddo
-   
-   do j=2,ny
-      write(100,*) (rho(i,j),i=2,nx)
-   enddo
-   do j=2,ny
-      write(100,*) (uu(i,j), i=2,nx)
-   enddo
-   do j=2,ny
-      write(100,*) (uv(i,j), i=2,nx)
-   enddo
-   do j=2,ny
-      write(100,*) (p(i,j), i=2,nx)
-   enddo
-   do j=2,ny
-      write(100,*) (m(i,j), i=2,nx)
-   enddo
-
-   close(100)
+    close(un)
+    deallocate(P)
+   contains
+    subroutine scalar(name,vals)
+    character(len=*), intent(in) :: name
+    real*8, intent(in) :: vals(:)
+    integer :: i
+     write(un,'(A,A,A)') 'SCALARS ',name,' double 1'
+     write(un,'(A)') 'LOOKUP_TABLE default'
+     do i = 1,size(vals)
+       write(un,'(ES24.15)') vals(i)
+     enddo
+    end subroutine
    end subroutine
 
    subroutine mat_mult(A,B,C,dims)
-      implicit none
-      integer*8 :: i,j,k
-      integer*8, intent(in) :: dims(:)
-      real*8, intent(in) :: A(dims(1),dims(2)),B(dims(3),dims(4))
-      real*8, intent(inout) :: C(dims(1),dims(4))
-      real*8 :: sum1
-      real*8, allocatable :: AA(:,:), BB(:,:)
-       C(:,:) = 0.0d0
-       do i = 1,dims(1)
-       do j = 1,dims(4)
-        do k = 1,dims(3)
-          C(i,j) = C(i,j) + A(i,k)*B(k,j)
-        enddo
-       enddo
-       enddo
-
+   !C = A*B for small explicit-shape matrices, dims = (rows A, cols A,
+   !rows B, cols B)
+   implicit none
+   integer, intent(in) :: dims(:)
+   real*8, intent(in) :: A(dims(1),dims(2)),B(dims(3),dims(4))
+   real*8, intent(inout) :: C(dims(1),dims(4))
+   integer :: i,j,k
+    C(:,:) = 0.0d0
+    do j = 1,dims(4)
+    do k = 1,dims(3)
+    do i = 1,dims(1)
+      C(i,j) = C(i,j) + A(i,k)*B(k,j)
+    enddo
+    enddo
+    enddo
    end subroutine
 
    subroutine dfromp(U,V,sgn)
-     implicit none
-     real*8, intent(inout) :: U(:)
-     real*8, intent(inout) :: V(:)
-     integer, intent(in) :: sgn
-     if(sgn == 1) then
-        U(1) = V(1)
-        U(2) = V(1)*V(2)
-        U(3) = V(1)*V(3)
-        U(4) = V(1)*cv*V(4) + 0.5d0*V(1)*(V(2)*V(2) + V(3)*V(3))
-     elseif(sgn == -1) then
-        V(1) = U(1)
-        V(2) = U(2)/U(1)
-        V(3) = U(3)/U(1)
-        V(4) = (U(4)/U(1) -  0.5d0*(V(2)*V(2) + V(3)*V(3)))/cv
-     elseif(sgn == 2) then
-        U(1) = V(1)
-        U(2) = V(1)*V(2)
-        U(3) = V(1)*V(3)
-        U(4) = V(4)/gamm + (0.5d0)*(V(1))*(V(2)*V(2) + V(3)*V(3))
-      elseif(sgn== -2) then
-        V(1) = U(1)
-        V(2) = U(2)/U(1)
-        V(3) = U(3)/U(1)
-        V(4) = gamm*(U(4) - 0.5d0*V(1)*(V(2)*V(2) + V(3)*V(3)))
-      else
-         print*,'not a valid option for dfromp'
-         stop
-      endif
+   !Conversions between conserved U and primitive V:
+   !  sgn =  2: V = (rho,u,v,p) -> U      sgn = -2: U -> V = (rho,u,v,p)
+   !  sgn =  1: V = (rho,u,v,T) -> U      sgn = -1: U -> V = (rho,u,v,T)
+   implicit none
+   real*8, intent(inout) :: U(:)
+   real*8, intent(inout) :: V(:)
+   integer, intent(in) :: sgn
+    if(sgn == 1) then
+      U(1) = V(1)
+      U(2) = V(1)*V(2)
+      U(3) = V(1)*V(3)
+      U(4) = V(1)*cv*V(4) + 0.5d0*V(1)*(V(2)*V(2) + V(3)*V(3))
+    elseif(sgn == -1) then
+      V(1) = U(1)
+      V(2) = U(2)/U(1)
+      V(3) = U(3)/U(1)
+      V(4) = (U(4)/U(1) -  0.5d0*(V(2)*V(2) + V(3)*V(3)))/cv
+    elseif(sgn == 2) then
+      U(1) = V(1)
+      U(2) = V(1)*V(2)
+      U(3) = V(1)*V(3)
+      U(4) = V(4)/gamm + (0.5d0)*(V(1))*(V(2)*V(2) + V(3)*V(3))
+    elseif(sgn == -2) then
+      V(1) = U(1)
+      V(2) = U(2)/U(1)
+      V(3) = U(3)/U(1)
+      V(4) = gamm*(U(4) - 0.5d0*V(1)*(V(2)*V(2) + V(3)*V(3)))
+    else
+      print*,'not a valid option for dfromp'
+      stop 1
+    endif
    end subroutine
 
    subroutine calc_res(U1,U2,res)
-     implicit none
-     real*8,intent(in) :: u1(:,:,:),U2(:,:,:)
-     real*8,intent(inout) :: res
-     integer*8 :: i,j,k
-     real*8 :: uref(4),ainf,uinf
-     !RMS change of all four conserved variables over the interior cells,
-     !each normalised by its freestream scale so they are comparable
-     ainf = sqrt(gam*fs(2)/fs(3))
-     uinf = fs(1)*ainf
-     uref(1) = fs(3)
-     uref(2) = fs(3)*max(uinf,ainf)
-     uref(3) = uref(2)
-     uref(4) = fs(2)/gamm + 0.5d0*fs(3)*uinf*uinf
-     res = 0.0d0
-     do i = 2,nx
-     do j = 2,ny
-      do k = 1,4
-       res = res + ((U2(i,j,k)-U1(i,j,k))/uref(k))**2
-      enddo
-      if(isnan(res) .eqv. .true.) then
-         print*,'NaN at i=',i,'j=',j
-         return
-      endif
-     enddo
-     enddo
-     
-     res = sqrt(res/dble(4*(nx-1)*(ny-1)))
-   end subroutine
-   
-   subroutine get_dt(U,dt,CFL)
+   !RMS change of the four conserved variables over the real cells, each
+   !normalised by its freestream scale so they are comparable
    implicit none
-   real*8, intent(inout) :: dt,CFL,U(:,:,:)
-   real*8 :: a,dx,d,V(4),q(2),Sx(2),Sy(2),vol,t1,t2,Sx2,Sy2,dtnew
-   real*8 :: lamv
-   integer*8 :: i,j,k
-   !Start from a large value so dt is the true CFL limit each call
-   dt = huge(1.0d0)
-   do i =2,nx
-   do j =2,ny
-    
-    call dfromp(U(i,j,:),V,-2)
-    a = sqrt(gam*V(4)/V(1))
-    
-    q(1) = V(2)
-    q(2) = V(3)
+   real*8, intent(in) :: U1(:,:),U2(:,:)
+   real*8, intent(out) :: res
+   integer :: c,k
+   real*8 :: uref(4),ainf,uinf
+    ainf = sqrt(gam*fs(2)/fs(3))
+    uinf = fs(1)*ainf
+    uref(1) = fs(3)
+    uref(2) = fs(3)*max(uinf,ainf)
+    uref(3) = uref(2)
+    uref(4) = fs(2)/gamm + 0.5d0*fs(3)*uinf*uinf
+    res = 0.0d0
+    do c = 1,ncell
+      do k = 1,4
+        res = res + ((U2(k,c)-U1(k,c))/uref(k))**2
+      enddo
+      if(isnan(res)) then
+        print*,'NaN in cell',c,' at (x,y) =',cctr(1,c),cctr(2,c)
+        return
+      endif
+    enddo
+    res = sqrt(res/dble(4*ncell))
+   end subroutine
 
-    Sx(1) = nxy(i,j,2) - nxy(i,j-1,2)
-    Sx(2) = -(nxy(i,j,1) - nxy(i,j-1,1))
-    
-    Sy(1) = nxy(i,j,2) - nxy(i-1,j,2)
-    Sy(2) = -(nxy(i,j,1) - nxy(i-1,j,1))
-
-    vol = dxy(i,j)
-
-    t1 = abs(q(1)*Sx(1) + q(2)*Sx(2))
-    t2 = abs(q(1)*Sy(1) + q(2)*Sy(2))
-    Sx2 = Sx(1)*Sx(1) + Sx(2)*Sx(2)
-    Sy2 = Sy(1)*Sy(1) + Sy(2)*Sy(2)
-    !Viscous spectral radius (thin-layer: j-direction only). Needed for
-    !stability of the explicit scheme near the wall, where the grid is
-    !very fine in j. The implicit scheme treats viscous terms implicitly.
-    lamv = 0.0d0
-    if(ivisc == 1 .AND. impl == 0) then
-      lamv = max(4.0d0/3.0d0, gam/Pr)*(mu/V(1))*Sy2/vol
-    endif
-    dtnew = CFL*(vol/(t1 + t2 + a*sqrt(Sx2 + Sy2) + 2.0d0*lamv))
-   
-    if(dt .GT. dtnew) then
-      dt = dtnew
-    endif
-   
-
-   enddo
-   enddo
+   subroutine get_dt(U,dt)
+   !Global time step: dt = CFL * min over cells of
+   !   area / (1/2 * sum over faces of (|u.n| + a) * length)
+   implicit none
+   real*8, intent(in) :: U(:,:)
+   real*8, intent(out) :: dt
+   integer :: c,k,f
+   real*8 :: V(4),Uc(4),a,lam
+    dt = huge(1.0d0)
+    do c = 1,ncell
+      Uc = U(:,c)
+      call dfromp(Uc,V,-2)
+      a = sqrt(gam*V(4)/V(1))
+      lam = 0.0d0
+      do k = 1,ncface(c)
+        f = cface(k,c)
+        lam = lam + (abs(V(2)*fnrm(1,f) + V(3)*fnrm(2,f)) + a)*flen(f)
+      enddo
+      dt = min(dt, CFL*cvol(c)/(0.5d0*lam))
+    enddo
    end subroutine
 
    subroutine inverse_4x4(A,B)
    implicit none
    real*8, intent(inout) :: A(:,:), B(:,:)
-   integer*8 :: i,j,k
    real*8 :: detA
    !Calculating Determinant of A
    detA = A(1,1)*A(2,2)*A(3,3)*A(4,4) + A(1,1)*A(2,3)*A(3,4)*A(4,2) + A(1,1)*A(2,4)*A(3,2)*A(4,3)
@@ -589,4 +450,4 @@ contains
    B = (1.0d0/detA)*B(:,:)
    end subroutine
 
-  end module
+end module
