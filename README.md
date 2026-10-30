@@ -67,6 +67,7 @@ bin/scuffs --grid path/to/mesh.su2 --mesh-check
 | `-g`, `--grid FILE` | SU2 mesh (required) |
 | `-i`, `--input FILE` | Input file (default `input.inp`) |
 | `--mesh-check` | Read and check the mesh, write `mesh.vtk` and `mesh_boundary.vtk`, then stop |
+| `--gradient-test` | Check the least-squares and Green–Gauss cell gradients on the mesh with analytic fields, then stop |
 | `-h`, `--help` | Show usage |
 
 `--input=FILE` and `--grid=FILE` also work.
@@ -148,13 +149,14 @@ tools/structured2su2.py grids/plate.dat grids/plate.su2 \
 
 `--imin/--imax/--jmin/--jmax` name the four sides (sides with the same name
 become one marker); `--split SIDE:NODE:BEFORE:AFTER` splits a side into two
-markers at a node index.
+markers at a node index; `--triangulate` splits every quad into two triangles
+(`tools/convert_grids.sh` also writes `cyl_tri.su2` this way, for testing).
 
 ## Output
 
 | File | Contents |
 |---|---|
-| `data.vtk` | Legacy VTK: cell-centred rho, u, v, p, Mach and a velocity vector |
+| `data.vtk` | Legacy VTK: cell-centred rho, u, v, p, Mach, density-gradient magnitude `grad_rho` (numerical schlieren) and a velocity vector |
 | `residual.dat` | Iteration and RMS change of the four conserved variables, each normalised by its freestream value |
 
 Each iteration also prints `iteration, physical time, CFL, dt, residual` to

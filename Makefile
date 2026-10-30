@@ -13,7 +13,8 @@ BUILDDIR = build
 BINDIR   = bin
 TARGET   = $(BINDIR)/scuffs
 
-SRCS = $(SRCDIR)/mesh.f90 $(SRCDIR)/util.f90 $(SRCDIR)/solver.f90 $(SRCDIR)/main.f90
+SRCS = $(SRCDIR)/mesh.f90 $(SRCDIR)/gradients.f90 $(SRCDIR)/util.f90 \
+       $(SRCDIR)/solver.f90 $(SRCDIR)/main.f90
 OBJS = $(patsubst $(SRCDIR)/%.f90,$(BUILDDIR)/%.o,$(SRCS))
 
 all: $(TARGET)
@@ -25,10 +26,11 @@ $(TARGET): $(OBJS) | $(BINDIR)
 $(BUILDDIR)/%.o: $(SRCDIR)/%.f90 | $(BUILDDIR)
 	$(FC) $(FFLAGS) -J$(BUILDDIR) -c $< -o $@
 
-# Module dependencies: mesh -> util -> solver -> main
-$(BUILDDIR)/util.o: $(BUILDDIR)/mesh.o
+# Module dependencies: mesh -> gradients -> util -> solver -> main
+$(BUILDDIR)/gradients.o: $(BUILDDIR)/mesh.o
+$(BUILDDIR)/util.o: $(BUILDDIR)/mesh.o $(BUILDDIR)/gradients.o
 $(BUILDDIR)/solver.o: $(BUILDDIR)/util.o $(BUILDDIR)/mesh.o
-$(BUILDDIR)/main.o: $(BUILDDIR)/mesh.o $(BUILDDIR)/util.o $(BUILDDIR)/solver.o
+$(BUILDDIR)/main.o: $(BUILDDIR)/mesh.o $(BUILDDIR)/gradients.o $(BUILDDIR)/util.o $(BUILDDIR)/solver.o
 
 $(BUILDDIR) $(BINDIR):
 	mkdir -p $@

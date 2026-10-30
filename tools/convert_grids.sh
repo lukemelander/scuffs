@@ -15,6 +15,8 @@ $CONV "$G/rampb.dat" "$G/rampb.su2" --imin inlet --imax outlet --jmin wall --jma
 # Cylinder (front half): i runs around the body, j outward. Both i ends are
 # outflow, the outer boundary is inflow, j=1 is the cylinder wall
 $CONV "$G/cyl.dat" "$G/cyl.su2" --imin outlet --imax outlet --jmin wall --jmax farfield
+# Same mesh split into triangles (for testing on triangle meshes)
+$CONV "$G/cyl.dat" "$G/cyl_tri.su2" --imin outlet --imax outlet --jmin wall --jmax farfield --triangulate
 
 # Flat plate: the bottom is a symmetry plane up to node 10 (x = 0.09), then
 # the plate; the top is a mirror boundary

@@ -7,6 +7,7 @@ program main
 !   scuffs --grid MESH.su2 --mesh-check
 !-----------------------------------------------------------------------
    use mesh
+   use gradients
    use utilities
    use solver
    implicit none
@@ -23,8 +24,15 @@ program main
    endif
    call check_file(grid_file)
 
-   !Mesh
+   !Mesh and the least-squares gradient matrices
    call mesh_setup(trim(grid_file))
+   call setup_gradients()
+
+   !Gradient test mode: check the gradients on this mesh and stop
+   if(grad_test) then
+     call gradient_test()
+     stop
+   endif
 
    !Mesh check mode: write VTK files of the mesh and stop
    if(mesh_check) then
@@ -48,6 +56,7 @@ program main
    allocate(U1(4,ncell+nbface),U2(4,ncell+nbface))
    iblend = 1
    call init_flow(U1)
+   call set_ghosts(U1)
    U2 = U1
    ttot = 0.0d0
    res = 0.0d0
@@ -57,6 +66,8 @@ program main
 
    do it = 1,iter
      if(cflramp == 1) call cfl_ramp(it,CFL)
+     !Wall and mirror ghosts from the current interior states
+     call set_ghosts(U1)
      call get_dt(U1,dt)
      if(impl == 0) then
        call solver_exp(dt,U1,U2)
@@ -72,6 +83,7 @@ program main
      write(99,*) it,res
 
      if(modulo(it,isave) == 0) then
+       call set_ghosts(U2)
        call write_solution_vtk(U2,'data.vtk')
        print*,'saved to data.vtk'
      endif
@@ -82,6 +94,7 @@ program main
 
    !Final solution (unless the run diverged)
    if(.NOT. isnan(res)) then
+     call set_ghosts(U1)
      call write_solution_vtk(U1,'data.vtk')
      print*,'final solution saved to data.vtk'
    endif

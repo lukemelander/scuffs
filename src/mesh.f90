@@ -43,10 +43,10 @@ real*8, allocatable, public :: fmid(:,:)        !(2,nface) midpoint
 !Markers
 character(len=64), allocatable, public :: markname(:)   !(nmark)
 
-!Cell centre definition. The vertex average matches the structured v1
-!code (useful for comparing results); the area centroid is the correct
-!choice for second-order reconstruction and viscous gradients.
-logical, public :: use_vertex_average = .true.
+!Cell centre definition: the area centroid (needed for gradients and
+!second-order reconstruction). Setting this to .true. uses the vertex
+!average instead, as the structured v1 code did.
+logical, public :: use_vertex_average = .false.
 
 !Marker edges read from the file (used while building faces)
 integer :: nmedge = 0
@@ -418,7 +418,7 @@ contains
    subroutine compute_geometry()
    implicit none
    integer :: c,k,nv,a,b,f,g
-   real*8 :: cr,ax,ay,dx,dy
+   real*8 :: cr,ax,ay,dx,dy,dn
 
     if(allocated(cvol)) deallocate(cvol,cctr,fnrm,flen,fmid)
     allocate(cvol(ncell),cctr(2,ncell+nbface))
@@ -460,10 +460,12 @@ contains
       fmid(2,f) = 0.5d0*(xy(2,a)+xy(2,b))
     enddo
 
-    !Ghost-cell centres: left centre reflected through the face midpoint
+    !Ghost-cell centres: left centre mirrored across the face line, so the
+    !vector from a cell to its ghost is normal to the boundary
     do f = nintface+1,nface
       g = fcell(2,f)
-      cctr(:,g) = 2.0d0*fmid(:,f) - cctr(:,fcell(1,f))
+      dn = dot_product(cctr(:,fcell(1,f)) - fmid(:,f), fnrm(:,f))
+      cctr(:,g) = cctr(:,fcell(1,f)) - 2.0d0*dn*fnrm(:,f)
     enddo
    end subroutine
 

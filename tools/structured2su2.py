@@ -90,6 +90,9 @@ def main():
     for side in SIDES:
         ap.add_argument(f"--{side}", default=side, metavar="NAME",
                         help=f"marker name for the {side} side (default: {side})")
+    ap.add_argument("--triangulate", action="store_true",
+                    help="split every quad into two triangles, alternating the diagonal in a "
+                         "checkerboard pattern (for testing on triangle meshes)")
     ap.add_argument("--split", action="append", default=[], metavar="SIDE:NODE:BEFORE:AFTER",
                     help="split a side into two markers: edges starting at node index < NODE "
                          "(1-based, along the side) get BEFORE, the rest get AFTER. Can be repeated.")
@@ -107,8 +110,16 @@ def main():
 
     # quads, counter-clockwise in (i, j) index space
     nid = lambda i, j: (j - 1) * nx + (i - 1)
-    cells = [(nid(i, j), nid(i + 1, j), nid(i + 1, j + 1), nid(i, j + 1))
-             for j in range(1, ny) for i in range(1, nx)]
+    cells = []
+    for j in range(1, ny):
+        for i in range(1, nx):
+            a, b, c, d = nid(i, j), nid(i + 1, j), nid(i + 1, j + 1), nid(i, j + 1)
+            if not args.triangulate:
+                cells.append((a, b, c, d))
+            elif (i + j) % 2 == 0:          # diagonal a-c
+                cells += [(a, b, c), (a, c, d)]
+            else:                           # diagonal b-d
+                cells += [(a, b, d), (b, c, d)]
 
     # boundary edges grouped by marker name (in first-seen order)
     markers = {}
@@ -125,8 +136,9 @@ def main():
         out.write(f"% Converted from {args.input} ({nx} x {ny} nodes) by structured2su2.py\n")
         out.write("NDIME= 2\n")
         out.write(f"NELEM= {len(cells)}\n")
-        for e, (a, b, c, d) in enumerate(cells):
-            out.write(f"9 {a} {b} {c} {d} {e}\n")
+        for e, cell in enumerate(cells):
+            etype = 9 if len(cell) == 4 else 5
+            out.write(f"{etype} {' '.join(map(str, cell))} {e}\n")
         out.write(f"NPOIN= {nx * ny}\n")
         for k in range(nx * ny):
             out.write(f"{x[k]:.15e} {y[k]:.15e} {k}\n")
@@ -138,7 +150,8 @@ def main():
                 out.write(f"3 {a} {b}\n")
 
     summary = ", ".join(f"{name} ({len(edges)})" for name, edges in markers.items())
-    print(f"{args.input} -> {args.output}: {nx} x {ny} nodes, {len(cells)} quads, markers: {summary}")
+    kind = "triangles" if args.triangulate else "quads"
+    print(f"{args.input} -> {args.output}: {nx} x {ny} nodes, {len(cells)} {kind}, markers: {summary}")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ module utilities
 ! cell per boundary face (see the mesh module).
 !-----------------------------------------------------------------------
 use mesh
+use gradients
 implicit none
 real*8, parameter :: pi = acos(-1.0d0)
 real*8, parameter :: gam = 1.4d0
@@ -37,12 +38,15 @@ character(len=256) :: input_file = 'input.inp'
 character(len=256) :: grid_file = ''
 !--mesh-check: read and check an SU2 mesh, write VTK files, stop
 logical :: mesh_check = .false.
+!--gradient-test: check the cell gradients on the mesh and stop
+logical :: grad_test = .false.
 contains
    subroutine parse_args()
    !Reads command-line options:
    !  --input FILE / -i FILE / --input=FILE   input file (default input.inp)
    !  --grid FILE  / -g FILE / --grid=FILE    SU2 mesh file (required)
    !  --mesh-check                            check an SU2 mesh and stop
+   !  --gradient-test                         check the cell gradients and stop
    !  --help / -h
    implicit none
    integer :: i,nargs,eq
@@ -80,6 +84,8 @@ contains
         endif
       case('--mesh-check')
         mesh_check = .true.
+      case('--gradient-test')
+        grad_test = .true.
       case('--help','-h')
         call print_usage()
         stop
@@ -99,6 +105,7 @@ contains
     print '(A)','  -i, --input FILE   input file (default: input.inp)'
     print '(A)','      --mesh-check   check the mesh, write mesh.vtk and'
     print '(A)','                     mesh_boundary.vtk, then stop'
+    print '(A)','      --gradient-test  check the cell gradients on the mesh, then stop'
     print '(A)','  -h, --help         show this message'
    end subroutine
 
@@ -229,21 +236,28 @@ contains
    end subroutine
 
    subroutine write_solution_vtk(U,fname)
-   !Cell-centred rho, u, v, p, Mach and velocity on the mesh (legacy VTK)
+   !Cell-centred rho, u, v, p, Mach, |grad rho| and velocity on the mesh
+   !(legacy VTK). The ghost cells of U must be set (set_ghosts), since the
+   !density gradient uses them.
    implicit none
    real*8, intent(in) :: U(:,:)
    character(len=*), intent(in) :: fname
    integer, parameter :: un = 100
    integer :: c,k
    real*8 :: V(4),Uc(4)
-   real*8, allocatable :: P(:,:)
-    !primitive variables of the real cells
-    allocate(P(5,ncell))
-    do c = 1,ncell
+   real*8, allocatable :: P(:,:),Q(:,:),grad(:,:,:)
+    !primitive variables of every cell (ghosts included)
+    allocate(Q(4,ncell+nbface),P(6,ncell),grad(2,4,ncell))
+    do c = 1,ncell+nbface
       Uc = U(:,c)
       call dfromp(Uc,V,-2)
-      P(1:4,c) = V
-      P(5,c) = sqrt(V(2)**2 + V(3)**2)/sqrt(gam*V(4)/V(1))
+      Q(:,c) = V
+    enddo
+    call lsq_gradients(Q,grad)
+    do c = 1,ncell
+      P(1:4,c) = Q(:,c)
+      P(5,c) = sqrt(Q(2,c)**2 + Q(3,c)**2)/sqrt(gam*Q(4,c)/Q(1,c))
+      P(6,c) = sqrt(grad(1,1,c)**2 + grad(2,1,c)**2)
     enddo
 
     open(unit=un,file=trim(fname),status='replace',action='write')
@@ -273,12 +287,13 @@ contains
     call scalar('v',P(3,:))
     call scalar('p',P(4,:))
     call scalar('mach',P(5,:))
+    call scalar('grad_rho',P(6,:))
     write(un,'(A)') 'VECTORS velocity double'
     do c = 1,ncell
       write(un,'(3ES24.15)') P(2,c),P(3,c),0.0d0
     enddo
     close(un)
-    deallocate(P)
+    deallocate(P,Q,grad)
    contains
     subroutine scalar(name,vals)
     character(len=*), intent(in) :: name

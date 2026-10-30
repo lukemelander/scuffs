@@ -217,6 +217,39 @@ contains
     deallocate(flux,A,Rc,Minv,dUk1,dUk2,B)
    end subroutine
 
+   subroutine set_ghosts(U)
+   !Ghost-cell states from the boundary conditions, so every ghost holds a
+   !sensible state (used as a neighbour by the cell gradients):
+   !  inflow:    freestream (unchanged)
+   !  outflow:   saved characteristic state (unchanged)
+   !  slip wall: interior state with the normal velocity reflected
+   !  mirror:    copy of the interior
+   !  adiabatic: interior state with both velocity components reflected
+   implicit none
+   real*8, intent(inout) :: U(:,:)
+   integer :: f,cl,g,bc
+   real*8 :: V(4),Ui(4),un
+    do f = nintface+1,nface
+      bc = mbc(fmark(f))
+      cl = fcell(1,f)
+      g = fcell(2,f)
+      select case(bc)
+      case(BC_SLIPWALL)
+        Ui = U(:,cl)
+        call dfromp(Ui,V,-2)
+        un = V(2)*fnrm(1,f) + V(3)*fnrm(2,f)
+        V(2) = V(2) - 2.0d0*un*fnrm(1,f)
+        V(3) = V(3) - 2.0d0*un*fnrm(2,f)
+        call dfromp(Ui,V,2)
+        U(:,g) = Ui
+      case(BC_MIRROR)
+        U(:,g) = U(:,cl)
+      case(BC_ADIABATIC)
+        U(:,g) = (/U(1,cl),-U(2,cl),-U(3,cl),U(4,cl)/)
+      end select
+    enddo
+   end subroutine
+
    !--------------------------------------------------------------------
    ! Boundary conditions. U(1,:) is the interior cell, U(2,:) the ghost;
    ! nf = (n_x, n_y, length) with n pointing out of the domain.
@@ -277,7 +310,6 @@ contains
       Ui = U(1,:)
       call dfromp(Ui,V,-2)
       F(:) = (/0.0d0,nf(1)*V(4)*nf(3),nf(2)*V(4)*nf(3),0.0d0/)
-      U(2,:) = 0.0d0
 
     case(BC_MIRROR)
       !Ghost = interior
