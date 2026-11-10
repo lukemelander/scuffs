@@ -128,6 +128,7 @@ contains
    integer :: c
     allocate(flux(4,nface),A(4,4,2,nface),Rc(4,ncell))
     call calc_fluxes(dt,U1,U2,flux,A)
+    if(ivisc == 1) call add_viscous(U1,flux,A)
     call assemble_residual(flux,Rc)
     do c = 1,ncell
       U2(:,c) = U1(:,c) - (dt/cvol(c))*Rc(:,c)
@@ -154,6 +155,7 @@ contains
     allocate(flux(4,nface),A(4,4,2,nface),Rc(4,ncell),Minv(4,4,ncell))
     allocate(dUk1(4,ncell+nbface),dUk2(4,ncell),B(4,ncell))
     call calc_fluxes(dt,U1,U2,flux,A)
+    if(ivisc == 1) call add_viscous(U1,flux,A)
     call assemble_residual(flux,Rc)
 
     !Diagonal blocks: +A(left) on the left cell, -A(right) on the right
@@ -249,6 +251,142 @@ contains
       end select
     enddo
    end subroutine
+
+   !--------------------------------------------------------------------
+   ! Viscous fluxes (full Navier-Stokes)
+   !--------------------------------------------------------------------
+   subroutine add_viscous(U,flux,A)
+   !Subtracts the viscous flux from every face flux and, for the implicit
+   !solver, adds an approximate viscous Jacobian to the face Jacobians.
+   !The ghost cells of U must be set (set_ghosts).
+   !
+   !Face gradients of u, v and T: the average of the two cells' least-
+   !squares gradients, with the component along the line joining the cell
+   !centres (unit vector t, length |d|) replaced by the two-cell difference:
+   !   grad_f = grad_avg + [ (phi_R - phi_L)/|d| - grad_avg . t ] t
+   !Stresses (Stokes hypothesis, constant viscosity mu) and heat flux:
+   !   tau_xx = 2 mu u_x + lam div,  tau_yy = 2 mu v_y + lam div,
+   !   tau_xy = mu (u_y + v_x),      q = -k grad T
+   !Viscous flux through the face (normal n, length L):
+   !   Fv = L (0, tau.n, ..., u_f.(tau.n) - q.n)
+   !Boundaries: slip walls and mirrors carry no viscous flux; the no-slip
+   !adiabatic wall gets u = 0 and zero heat flux from its reflected ghost.
+   implicit none
+   real*8, intent(in) :: U(:,:)
+   real*8, intent(inout) :: flux(:,:),A(:,:,:,:)
+   real*8, allocatable :: Q(:,:),grad(:,:,:)
+   integer :: c,f,cl,cr,bc,k
+   integer, parameter :: ivars(3) = (/2,3,5/)
+   real*8 :: Ut(4),V(4),d(2),dl,t(2),gavg(2),gf(2,5),corr
+   real*8 :: ux,uy,vx,vy,Tx,Ty,uf,vf,div,txx,tyy,txy,nx,ny,L,dn
+   real*8 :: Fv(4),M(4,4),MS(4,4),a11,a12,a22
+    !primitive variables (rho,u,v,p,T) of every cell, ghosts included
+    allocate(Q(5,ncell+nbface),grad(2,5,ncell))
+    do c = 1,ncell+nbface
+      Ut = U(:,c)
+      call dfromp(Ut,V,-2)
+      Q(1:4,c) = V
+      Q(5,c) = V(4)/(Rair*V(1))
+    enddo
+    call lsq_gradients(Q,grad)
+
+    do f = 1,nface
+      cl = fcell(1,f)
+      cr = fcell(2,f)
+      bc = 0
+      if(f > nintface) bc = mbc(fmark(f))
+      if(bc == BC_SLIPWALL .OR. bc == BC_MIRROR) cycle
+      nx = fnrm(1,f)
+      ny = fnrm(2,f)
+      L = flen(f)
+
+      !face gradients of u, v, T
+      d = cctr(:,cr) - cctr(:,cl)
+      dl = sqrt(d(1)*d(1) + d(2)*d(2))
+      t = d/dl
+      do k = 1,3
+        if(cr <= ncell) then
+          gavg = 0.5d0*(grad(:,ivars(k),cl) + grad(:,ivars(k),cr))
+        else
+          gavg = grad(:,ivars(k),cl)     !ghost: use the interior gradient
+        endif
+        corr = (Q(ivars(k),cr) - Q(ivars(k),cl))/dl - dot_product(gavg,t)
+        gf(:,ivars(k)) = gavg + corr*t
+      enddo
+      ux = gf(1,2)
+      uy = gf(2,2)
+      vx = gf(1,3)
+      vy = gf(2,3)
+      Tx = gf(1,5)
+      Ty = gf(2,5)
+      uf = 0.5d0*(Q(2,cl) + Q(2,cr))
+      vf = 0.5d0*(Q(3,cl) + Q(3,cr))
+
+      !stresses and viscous flux
+      div = ux + vy
+      txx = 2.0d0*mu*ux + lamu*div
+      tyy = 2.0d0*mu*vy + lamu*div
+      txy = mu*(uy + vx)
+      Fv(1) = 0.0d0
+      Fv(2) = L*(txx*nx + txy*ny)
+      Fv(3) = L*(txy*nx + tyy*ny)
+      Fv(4) = L*((uf*txx + vf*txy)*nx + (uf*txy + vf*tyy)*ny + Kq*(Tx*nx + Ty*ny))
+      flux(:,f) = flux(:,f) - Fv
+
+      !Approximate Jacobian for the implicit solver: only derivatives along
+      !the face normal, d(phi)/dn ~ (phi_R - phi_L)/dn, i.e.
+      !   Fv ~ M (V_R - V_L),   V = (rho,u,v,T)
+      if(impl == 1) then
+        !normal distance between the cell centres (guarded for very
+        !skewed faces)
+        dn = max(abs(d(1)*nx + d(2)*ny), 0.1d0*dl)
+        a11 = (2.0d0*mu + lamu)*nx*nx + mu*ny*ny
+        a12 = (mu + lamu)*nx*ny
+        a22 = mu*nx*nx + (2.0d0*mu + lamu)*ny*ny
+        M(:,:) = 0.0d0
+        M(2,2) = a11
+        M(2,3) = a12
+        M(3,2) = a12
+        M(3,3) = a22
+        M(4,2) = uf*a11 + vf*a12
+        M(4,3) = uf*a12 + vf*a22
+        M(4,4) = Kq
+        M = (L/dn)*M
+        !total flux = inviscid - viscous, so A(left) gains +M S_L and
+        !A(right) gains -M S_R
+        if(bc == BC_ADIABATIC) then
+          !ghost = interior with the velocity reflected, in primitive
+          !variables V_g = Rw V_L with Rw = diag(1,-1,-1,1). So
+          !V_g - V_L = diag(0,-2,-2,0) V_L and
+          !d(Fv)/dU_L = -M diag(0,2,2,0) S: only the velocity columns of M
+          !remain (T_g = T_L, so the heat flux does not depend on U_L)
+          MS = matmul(M*spread((/0.0d0,2.0d0,2.0d0,0.0d0/),1,4), dVdU(Q(:,cl)))
+          A(:,:,1,f) = A(:,:,1,f) + MS
+        else
+          A(:,:,1,f) = A(:,:,1,f) + matmul(M,dVdU(Q(:,cl)))
+          A(:,:,2,f) = A(:,:,2,f) - matmul(M,dVdU(Q(:,cr)))
+        endif
+      endif
+    enddo
+    deallocate(Q,grad)
+   end subroutine
+
+   function dVdU(Qc) result(S)
+   !d(rho,u,v,T)/d(conserved variables) at the state Qc = (rho,u,v,p,T)
+   implicit none
+   real*8, intent(in) :: Qc(:)
+   real*8 :: S(4,4),r,u,v,p,vsq
+    r = Qc(1)
+    u = Qc(2)
+    v = Qc(3)
+    p = Qc(4)
+    vsq = 0.5d0*(u*u + v*v)
+    S(1,:) = (/1.0d0,0.0d0,0.0d0,0.0d0/)
+    S(2,:) = (/-u/r,1.0d0/r,0.0d0,0.0d0/)
+    S(3,:) = (/-v/r,0.0d0,1.0d0/r,0.0d0/)
+    !dT = (dp - (p/rho) drho)/(rho R),  dp = (gam-1)(vsq,-u,-v,1).dU
+    S(4,:) = (gamm*(/vsq,-u,-v,1.0d0/) - (p/r)*(/1.0d0,0.0d0,0.0d0,0.0d0/))/(r*Rair)
+   end function
 
    !--------------------------------------------------------------------
    ! Boundary conditions. U(1,:) is the interior cell, U(2,:) the ghost;
@@ -503,7 +641,12 @@ contains
         !and Sinv stay exact inverses
         vsq = 0.5d0*(Vave(2)**2 + Vave(3)**2)
         a2 = a*a
-        eps = 0.001d0*a
+        !Small eigenvalue limiter: |lambda| is replaced by
+        !sqrt(lambda^2 + eps^2). The eigenvalues below are multiplied by the
+        !face length da, so eps must be too (eps = 0.001 a da), otherwise
+        !the limiter adds dissipation equivalent to a velocity of
+        !0.0005 a/da, which is huge on short faces
+        eps = 0.001d0*a*da
         Sinv(1,:) = (/1.0d0,0.0d0,0.0d0,0.0d0/)
         Sinv(2,:) = (/Vave(2),Vave(1),0.0d0,0.0d0/)
         Sinv(3,:) = (/Vave(3),0.0d0,Vave(1),0.0d0/)

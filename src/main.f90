@@ -1,7 +1,7 @@
 program main
 !-----------------------------------------------------------------------
 ! SCUFFS: Shock-capturing Compressible Unstructured Finite-volume Flow Solver
-! 2D, cell-centred, first order, on unstructured (triangle/quad) meshes.
+! 2D Euler / Navier-Stokes, cell-centred, on unstructured (tri/quad) meshes.
 !
 !   scuffs --grid MESH.su2 [--input input.inp]
 !   scuffs --grid MESH.su2 --mesh-check
@@ -44,11 +44,6 @@ program main
    !Input file (needs the mesh's marker names)
    print*,'Input file: ',trim(input_file)
    call read_input(input_file)
-   if(ivisc == 1) then
-     print*,'Viscous flow is not available yet on unstructured meshes (roadmap step A6).'
-     print*,'Set ivisc = 0 in the input file.'
-     stop 1
-   endif
    call init_gas()
 
    !Initial condition. U holds the real cells followed by one ghost cell

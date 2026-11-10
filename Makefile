@@ -1,7 +1,8 @@
 # Build SCUFFS (Shock-capturing Compressible Unstructured Finite-volume Flow Solver)
 #   make            optimised build -> bin/scuffs
 #   make debug      bounds checking + backtraces
-#   make clean      remove build/ and bin/
+#   make clean      remove build/, bin/ and the output files in examples/
+#   make cleanbuild remove build/ and bin/ only
 # Override the compiler or flags on the command line, e.g. make FC=ifx FFLAGS=-O3
 
 FC         = gfortran
@@ -36,9 +37,15 @@ $(BUILDDIR) $(BINDIR):
 	mkdir -p $@
 
 debug: FFLAGS = $(DEBUGFLAGS)
-debug: clean all
+debug: cleanbuild all
 
-clean:
+# Files written by runs in the example directories
+RUNFILES = data.vtk data.dat residual.dat run.log checkdf.dat mesh.vtk mesh_boundary.vtk
+
+cleanbuild:
 	rm -rf $(BUILDDIR) $(BINDIR)
 
-.PHONY: all debug clean
+clean: cleanbuild
+	rm -f $(foreach f,$(RUNFILES),examples/*/$(f))
+
+.PHONY: all debug clean cleanbuild

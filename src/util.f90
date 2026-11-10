@@ -186,7 +186,7 @@ contains
     if(ivisc == 0) then
       print*,'    inviscid flow'
     else
-      print*,'    viscous flow'
+      print*,'    viscous flow (full Navier-Stokes, constant viscosity)'
     endif
     if(impl == 0) then
       print*,'    1st order explicit time integration'
@@ -388,23 +388,33 @@ contains
 
    subroutine get_dt(U,dt)
    !Global time step: dt = CFL * min over cells of
-   !   area / (1/2 * sum over faces of (|u.n| + a) * length)
+   !   area / ( 1/2 sum_faces (|u.n| + a) L  +  lam_v )
+   !with, for explicit viscous runs, the viscous spectral radius
+   !   lam_v = max(4/3, gam/Pr) (mu/rho) sum_faces L^2 / area
+   !(the implicit solver treats the viscous terms implicitly)
    implicit none
    real*8, intent(in) :: U(:,:)
    real*8, intent(out) :: dt
    integer :: c,k,f
-   real*8 :: V(4),Uc(4),a,lam
+   real*8 :: V(4),Uc(4),a,lam,lamv,nueff
     dt = huge(1.0d0)
     do c = 1,ncell
       Uc = U(:,c)
       call dfromp(Uc,V,-2)
       a = sqrt(gam*V(4)/V(1))
       lam = 0.0d0
+      lamv = 0.0d0
       do k = 1,ncface(c)
         f = cface(k,c)
         lam = lam + (abs(V(2)*fnrm(1,f) + V(3)*fnrm(2,f)) + a)*flen(f)
+        lamv = lamv + flen(f)**2
       enddo
-      dt = min(dt, CFL*cvol(c)/(0.5d0*lam))
+      lam = 0.5d0*lam
+      if(ivisc == 1 .AND. impl == 0) then
+        nueff = max(4.0d0/3.0d0, gam/Pr)*mu/V(1)
+        lam = lam + nueff*lamv/cvol(c)
+      endif
+      dt = min(dt, CFL*cvol(c)/lam)
     enddo
    end subroutine
 

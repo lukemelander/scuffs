@@ -11,3 +11,6 @@ residual.dat
 checkdf.dat
 run.log
 *.vtk
+
+# Python bytecode
+__pycache__/

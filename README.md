@@ -2,14 +2,16 @@
 
 **S**hock-capturing **C**ompressible **U**nstructured **F**inite-volume **F**low **S**olver
 
-SCUFFS is a first-order, cell-centred finite-volume solver for the 2D Euler
-equations on unstructured meshes of triangles and quads, written in Fortran
+SCUFFS is a cell-centred finite-volume solver for the 2D Euler and
+Navier–Stokes equations on unstructured meshes of triangles and quads, written in Fortran
 90. It was written for a graduate course on finite-volume methods for
 hypersonic CFD on structured grids, and has since been cleaned up, debugged
 and moved to unstructured meshes.
 
 - Inviscid fluxes: modified Steger–Warming (MSW) flux-vector splitting with
-  pressure-gradient blending
+  pressure-gradient blending (first order)
+- Viscous fluxes: full Navier–Stokes, with face gradients from least-squares
+  cell gradients
 - Time integration: explicit (forward Euler), or implicit (backward Euler with
   point-Jacobi relaxation) with an optional CFL ramp for steady-state runs
 - Boundary conditions by named mesh marker: supersonic inflow,
@@ -17,8 +19,9 @@ and moved to unstructured meshes.
 - Meshes: SU2 format; a converter turns structured grids into SU2 meshes
 - Output: legacy VTK files that open in ParaView
 
-Viscous terms (full Navier–Stokes) and second-order fluxes are in progress;
-the structured v1.0 release (git tag `v1.0`) has thin-layer viscous terms.
+Second-order inviscid fluxes are in progress. The structured v1.0 release
+(git tag `v1.0`) used the thin-layer form of the viscous terms; the current
+code solves the full Navier–Stokes equations.
 
 ## Repository layout
 
@@ -81,8 +84,8 @@ bin/scuffs --grid path/to/mesh.su2 --mesh-check
 | `ramp_aligned_implicit` | `rampb.su2` | Same, on a grid aligned with the ramp shock |
 | `cylinder_m6_implicit` | `cyl.su2` | Mach 6 inviscid flow over a cylinder (bow shock), implicit |
 | `shock_tube` | `block.su2` | Shock tube in a closed box (gas at rest, lower half at 2x pressure and density) |
-| `plate_viscous_implicit` | `plate.su2` | Mach 1.5 laminar flat plate, implicit (needs the viscous terms; not runnable yet) |
-| `plate_viscous_explicit` | `plate.su2` | Same, explicit (not runnable yet) |
+| `plate_viscous_implicit` | `plate.su2` | Mach 1.5 laminar flat plate, implicit |
+| `plate_viscous_explicit` | `plate.su2` | Same, explicit (slow: the time step is set by the near-wall viscous limit) |
 
 Each case directory has `input.inp` (solver settings) and `case.conf`, which
 names the mesh in `grids/` that `run.sh` passes with `--grid`.
@@ -106,7 +109,7 @@ wall     3
 
 | Line | Values | Meaning |
 |---|---|---|
-| 1 | `ivisc` | 0 = inviscid (Euler). 1 = viscous (not available yet on unstructured meshes) |
+| 1 | `ivisc` | 0 = inviscid (Euler). 1 = viscous (full Navier–Stokes; viscosity from Sutherland's law at the freestream temperature, held constant; Pr = 0.7) |
 |   | `impl` | 0 = explicit, 1 = implicit (point Jacobi, `kmax`+1 = 10 sweeps, set in `src/util.f90`) |
 |   | `cfl_ramp` | 0 = constant CFL, 1 = built-in CFL ramp (see below) |
 | 2 | `p_inf rho_inf M_inf` | Freestream pressure [Pa], density [kg/m^3] and Mach number. The flow is in +x |
@@ -167,6 +170,9 @@ to 2D and colour by `mach`, `p` or `rho`.
 
 `tools/compare_v1.py v1/data.dat data.vtk` compares a solution with the
 structured v1.0 code on the same grid (cells line up one to one).
+
+`tools/blasius.py data.vtk --input input.inp --x 0.3 0.6 0.9` compares
+flat-plate velocity profiles with the Blasius solution.
 
 ## Notes
 

@@ -1,6 +1,6 @@
 1 1 1              !ivisc, impl, cfl_ramp
 1000.0 0.0071 1.5  !p_inf rho_inf M_inf
-5000 500           !iterations, save interval
+30000 500           !iterations, save interval
 0.4d0              !CFL (start of the ramp)
 5                  !number of boundary markers
 inlet    1         !marker name, BC type (1 inflow 2 outflow 3 slip wall 4 mirror 5 adiabatic wall)
