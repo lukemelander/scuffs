@@ -72,16 +72,21 @@ contains
    real*8, intent(inout) :: U2(:,:)
    real*8, intent(out) :: flux(:,:),A(:,:,:,:)
    integer :: f,cl,cr,bc
-   real*8 :: Up(2,4),np(2,2),nf(3)
+   real*8 :: Up(2,4),np(2,2),nf(3),sens
+   real*8, allocatable :: psens(:)
     A(:,:,:,:) = 0.0d0
+    allocate(psens(ncell+nbface))
+    call shock_sensor(U1,psens)
     do f = 1,nface
       cl = fcell(1,f)
       cr = fcell(2,f)
       Up(1,:) = U1(:,cl)
       Up(2,:) = U1(:,cr)
       nf = (/fnrm(1,f),fnrm(2,f),flen(f)/)
+      !Shock sensor of the face: largest of its two cells
+      sens = max(psens(cl),psens(cr))
       if(f <= nintface) then
-        call calc_MSWexp(flux(:,f),Up,nf,A(:,:,:,f))
+        call calc_MSWexp(flux(:,f),Up,nf,A(:,:,:,f),sens)
       else
         bc = mbc(fmark(f))
         np(1,:) = (/cctr(1,cl),cctr(1,cr)/)
@@ -89,15 +94,50 @@ contains
         if(bc == BC_SLIPWALL .OR. bc == BC_ADIABATIC) then
           !Walls: pressure flux only (the adiabatic wall's inviscid part
           !is a slip wall); its Jacobian goes on the cell's diagonal
-          call exp_bcs(dt,np,Up,flux(:,f),BC_SLIPWALL,nf)
+          call exp_bcs(dtcell(cl),np,Up,flux(:,f),BC_SLIPWALL,nf)
           call wall_jac(Up(1,:),nf,A(:,:,1,f))
         else
-          call exp_bcs(dt,np,Up,flux(:,f),bc,nf)
-          call calc_MSWexp(flux(:,f),Up,nf,A(:,:,:,f))
+          call exp_bcs(dtcell(cl),np,Up,flux(:,f),bc,nf)
+          call calc_MSWexp(flux(:,f),Up,nf,A(:,:,:,f),sens)
           if(bc == BC_OUTFLOW) U2(:,cr) = Up(2,:)
         endif
       endif
     enddo
+    deallocate(psens)
+   end subroutine
+
+   subroutine shock_sensor(U,psens)
+   !Cell-based shock sensor for the MSW blending: the largest relative
+   !pressure jump |pR - pL|/min(pL,pR) across any face of the cell. A face
+   !then blends with the larger of its own jump and its two cells' sensors,
+   !so every face of a cell in a shock (including faces that run through
+   !the shock in the flow direction) gets the full Steger-Warming
+   !dissipation. Without it, faces aligned with the flow inside a shock
+   !see little pressure jump and get almost no dissipation, which lets the
+   !shock develop a carbuncle on irregular meshes. isensor = 0 switches it
+   !off (sensor 0: each face uses only its own jump).
+   implicit none
+   real*8, intent(in) :: U(:,:)
+   real*8, intent(out) :: psens(:)
+   integer :: f,c,cl,cr
+   real*8 :: V(4),Ut(4),pg
+   real*8, allocatable :: p(:)
+    psens(:) = 0.0d0
+    if(isensor /= 1) return
+    allocate(p(ncell+nbface))
+    do c = 1,ncell+nbface
+      Ut = U(:,c)
+      call dfromp(Ut,V,-2)
+      p(c) = V(4)
+    enddo
+    do f = 1,nface
+      cl = fcell(1,f)
+      cr = fcell(2,f)
+      pg = abs(p(cr)-p(cl))/min(p(cl),p(cr))
+      psens(cl) = max(psens(cl),pg)
+      psens(cr) = max(psens(cr),pg)
+    enddo
+    deallocate(p)
    end subroutine
 
    subroutine assemble_residual(flux,Rc)
@@ -131,7 +171,7 @@ contains
     if(ivisc == 1) call add_viscous(U1,flux,A)
     call assemble_residual(flux,Rc)
     do c = 1,ncell
-      U2(:,c) = U1(:,c) - (dt/cvol(c))*Rc(:,c)
+      U2(:,c) = U1(:,c) - (dtcell(c)/cvol(c))*Rc(:,c)
     enddo
     deallocate(flux,A,Rc)
    end subroutine
@@ -168,7 +208,7 @@ contains
       if(cr <= ncell) Minv(:,:,cr) = Minv(:,:,cr) - A(:,:,2,f)
     enddo
     do c = 1,ncell
-      M = Id + (dt/cvol(c))*Minv(:,:,c)
+      M = Id + (dtcell(c)/cvol(c))*Minv(:,:,c)
       call inverse_4x4(M,Minv(:,:,c))
     enddo
 
@@ -190,7 +230,7 @@ contains
           np(1,:) = (/cctr(1,cl),cctr(1,cr)/)
           np(2,:) = (/cctr(2,cl),cctr(2,cr)/)
           nf = (/fnrm(1,f),fnrm(2,f),flen(f)/)
-          call impl_bcs(dt,np,Up,dUp,bc,nf)
+          call impl_bcs(dtcell(cl),np,Up,dUp,bc,nf)
           dUk1(:,cr) = dUp(2,:)
         enddo
         !Neighbour terms
@@ -208,7 +248,7 @@ contains
         enddo
       endif
       do c = 1,ncell
-        dUk2(:,c) = matmul(Minv(:,:,c), -(dt/cvol(c))*(Rc(:,c) + B(:,c)))
+        dUk2(:,c) = matmul(Minv(:,:,c), -(dtcell(c)/cvol(c))*(Rc(:,c) + B(:,c)))
       enddo
       dUk1(:,1:ncell) = dUk2(:,:)
     enddo
@@ -547,16 +587,17 @@ contains
    !--------------------------------------------------------------------
    ! Modified Steger-Warming flux
    !--------------------------------------------------------------------
-   subroutine blend_vars(VL,VR,Vave,Vp,Vm)
-   !Pressure-gradient weighted blending of the left/right states
+   subroutine blend_vars(VL,VR,Vave,Vp,Vm,sens)
+   !Pressure-gradient weighted blending of the left/right states. sens is
+   !the cell-based shock sensor of the face (0 when it is switched off).
    implicit none
-   real*8, intent(in) :: VL(:),VR(:)
+   real*8, intent(in) :: VL(:),VR(:),sens
    real*8, intent(inout) :: Vave(:),Vp(:),Vm(:)
    real*8 :: pg,den,AL,AR,wt
     !minimum pressure of the two sides
     den = min(VL(4),VR(4))
     !pressure gradient across the face and weight
-    pg = (VR(4)-VL(4))/den
+    pg = max(abs(VR(4)-VL(4))/den, sens)
     wt = 1.0d0/(1.0d0+pg**2)
     AL = sqrt(gam*VL(4)/VL(1))
     AR = sqrt(gam*VR(4)/VR(1))
@@ -572,11 +613,11 @@ contains
     Vm(5) = wt*((AL+AR)/2.0d0)+(1.0d0-wt)*AR
    end subroutine
 
-   subroutine calc_MSWexp(F,U,nf,Af)
+   subroutine calc_MSWexp(F,U,nf,Af,sens)
    !MSW flux F = A+ U(1) + A- U(2) through a face with normal nf (n_x, n_y,
    !length). Af(:,:,1) = A+, Af(:,:,2) = A-.
    implicit none
-   real*8, intent(in) :: nf(3)
+   real*8, intent(in) :: nf(3),sens
    real*8, intent(inout) :: U(:,:),F(:),Af(:,:,:)
    integer :: i,k,dims(4),ipass,npass
    real*8 :: VL(4),VR(4),Vave(4),Uave(4),Vp(5),Vm(5),Ut(4)
@@ -593,7 +634,7 @@ contains
     Uave(:) = (U(1,:) + U(2,:))/2.0d0
     call dfromp(Uave,Vave,-2)
     gm1 = gam-1.0d0
-    call blend_vars(VL,VR,Vave,Vp,Vm)
+    call blend_vars(VL,VR,Vave,Vp,Vm,sens)
     cosa = nf(1)
     sina = nf(2)
     da = nf(3)

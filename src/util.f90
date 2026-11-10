@@ -24,8 +24,19 @@ integer, parameter :: kmax = 9
 !routine): |lambda| >= eps_lhs*(|u_n| + a) on the left-hand side. Extra
 !dissipation there keeps the implicit scheme stable at high CFL near
 !shocks without changing the converged solution (the flux keeps the small
-!limiter). Raise towards 0.25-0.5 if a case still goes unstable.
-real*8, parameter :: eps_lhs = 0.2d0
+!limiter). Optional third value on the CFL line of the input file.
+real*8 :: eps_lhs = 0.2d0
+!Upper limit on the CFL number (caps the CFL ramp). Optional second value
+!on the CFL line of the input file.
+real*8 :: cfl_max = huge(1.0d0)
+!Local time stepping (1) or one global time step (0). Optional fourth
+!value on the first line of the input file.
+integer :: lts = 0
+!Cell-based shock sensor for the MSW blending (1 = on, 0 = off). Optional
+!fifth value on the first line of the input file.
+integer :: isensor = 1
+!Time step of every cell (equal to the global step unless lts = 1)
+real*8, allocatable :: dtcell(:)
 
 !Boundary-condition types
 integer, parameter :: BC_INFLOW = 1, BC_OUTFLOW = 2, BC_SLIPWALL = 3
@@ -130,10 +141,10 @@ contains
    subroutine read_input(fname)
    !Input file (list-directed; anything after the values on a line is a
    !comment):
-   !  ivisc impl cfl_ramp
+   !  ivisc impl cfl_ramp [lts [sensor]]
    !  p_inf rho_inf M_inf
    !  iterations save_interval
-   !  CFL
+   !  CFL [cfl_max [eps_lhs]]
    !  nbc                       number of boundary lines that follow
    !  marker_name bc_type       (nbc lines)
    !  initial_condition
@@ -141,14 +152,28 @@ contains
    implicit none
    character(len=*), intent(in) :: fname
    integer, parameter :: un = 10
-   integer :: nbc,k,m,btype
+   integer :: nbc,k,m,btype,nv
    character(len=64) :: bname
+   real*8 :: vals(5)
     call check_file(fname)
     open(unit=un,file=trim(fname),status='old',action='read')
-    read(un,*) ivisc, impl, cflramp
+    !line 1: ivisc impl cfl_ramp [lts [sensor]]
+    call read_values(un,vals,nv)
+    if(nv < 3) call input_error('line 1 needs ivisc, impl and cfl_ramp')
+    ivisc = nint(vals(1))
+    impl = nint(vals(2))
+    cflramp = nint(vals(3))
+    if(nv >= 4) lts = nint(vals(4))
+    if(nv >= 5) isensor = nint(vals(5))
     read(un,*) fs(2), fs(3), fs(1)
     read(un,*) iter, isave
-    read(un,*) CFL
+    !CFL line: CFL [cfl_max [eps_lhs]]
+    call read_values(un,vals,nv)
+    if(nv < 1) call input_error('the CFL line needs a CFL number')
+    CFL = vals(1)
+    if(nv >= 2) cfl_max = vals(2)
+    if(nv >= 3) eps_lhs = vals(3)
+    CFL = min(CFL,cfl_max)
     read(un,*) nbc
     allocate(mbc(nmark))
     mbc = 0
@@ -179,6 +204,47 @@ contains
     if(isave < 1) isave = iter
    end subroutine
 
+   subroutine read_values(un,vals,nv)
+   !Reads up to size(vals) numbers from the next line, ignoring anything
+   !after a '!'. nv returns how many numbers the line had (so trailing
+   !optional values can be left out).
+   implicit none
+   integer, intent(in) :: un
+   real*8, intent(out) :: vals(:)
+   integer, intent(out) :: nv
+   character(len=512) :: line
+   integer :: i,ic,ios
+   logical :: intok
+    read(un,'(A)',iostat=ios) line
+    if(ios /= 0) call input_error('unexpected end of file')
+    ic = index(line,'!')
+    if(ic > 0) line(ic:) = ''
+    !count the blank- or comma-separated tokens
+    nv = 0
+    intok = .false.
+    do i = 1,len_trim(line)
+      if(line(i:i) == ' ' .OR. line(i:i) == ',' .OR. line(i:i) == char(9)) then
+        intok = .false.
+      elseif(.NOT. intok) then
+        intok = .true.
+        nv = nv+1
+      endif
+    enddo
+    nv = min(nv,size(vals))
+    vals = 0.0d0
+    if(nv > 0) then
+      read(line,*,iostat=ios) vals(1:nv)
+      if(ios /= 0) call input_error('could not read the numbers on line: '//trim(line))
+    endif
+   end subroutine
+
+   subroutine input_error(msg)
+   implicit none
+   character(len=*), intent(in) :: msg
+    print*,'Input error: ',trim(msg)
+    stop 1
+   end subroutine
+
    subroutine init_gas()
    !Derived gas properties and a summary of the run
    implicit none
@@ -198,6 +264,20 @@ contains
       print*,'    1st order explicit time integration'
     else
       print*,'    1st order implicit time integration'
+      print '(A,F6.3)','     eps_lhs (implicit Jacobian limiter) = ',eps_lhs
+    endif
+    if(lts == 1) then
+      print*,'    local time stepping (steady state only)'
+    else
+      print*,'    global time step'
+    endif
+    if(isensor == 1) then
+      print*,'    MSW blending with cell-based shock sensor'
+    else
+      print*,'    MSW blending with face pressure jump only'
+    endif
+    if(cfl_max < 1.0d30) then
+      print '(A,F8.2)','     maximum CFL = ',cfl_max
     endif
     print*,'    Boundary conditions:'
     do m = 1,nmark
@@ -237,7 +317,7 @@ contains
         (/0.4d0,0.8d0,1.6d0,3.2d0,6.4d0,12.8d0,25.6d0,50.0d0,100.0d0/)
    integer :: i
     do i = 1,cflnum
-      if(itr == cfl_iter(i)) cfl = cfl_list(i)
+      if(itr == cfl_iter(i)) cfl = min(cfl_list(i),cfl_max)
     enddo
    end subroutine
 
@@ -393,8 +473,8 @@ contains
    end subroutine
 
    subroutine get_dt(U,dt)
-   !Global time step: dt = CFL * min over cells of
-   !   area / ( 1/2 sum_faces (|u.n| + a) L  +  lam_v )
+   !Time step of each cell, dtcell(c) = CFL * area / spectral radius, with
+   !   spectral radius = 1/2 sum_faces (|u.n| + a) L  +  lam_v
    !with, for explicit viscous runs, the viscous spectral radius
    !   lam_v = max(4/3, gam/Pr) (mu/rho) sum_faces L^2 / area
    !(the implicit solver treats the viscous terms implicitly)
@@ -402,8 +482,11 @@ contains
    real*8, intent(in) :: U(:,:)
    real*8, intent(out) :: dt
    integer :: c,k,f
+   !Global time stepping (lts = 0): every cell uses the smallest, dt.
+   !Local time stepping (lts = 1): every cell uses its own; dt returns the
+   !smallest (for printing only). Only for steady-state runs.
    real*8 :: V(4),Uc(4),a,lam,lamv,nueff
-    dt = huge(1.0d0)
+    if(.NOT. allocated(dtcell)) allocate(dtcell(ncell))
     do c = 1,ncell
       Uc = U(:,c)
       call dfromp(Uc,V,-2)
@@ -420,8 +503,10 @@ contains
         nueff = max(4.0d0/3.0d0, gam/Pr)*mu/V(1)
         lam = lam + nueff*lamv/cvol(c)
       endif
-      dt = min(dt, CFL*cvol(c)/lam)
+      dtcell(c) = CFL*cvol(c)/lam
     enddo
+    dt = minval(dtcell)
+    if(lts /= 1) dtcell(:) = dt
    end subroutine
 
    subroutine inverse_4x4(A,B)

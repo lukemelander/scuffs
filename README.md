@@ -83,6 +83,7 @@ bin/scuffs --grid path/to/mesh.su2 --mesh-check
 | `ramp_implicit` | `ramp.su2` | Same, implicit with CFL ramp |
 | `ramp_aligned_implicit` | `rampb.su2` | Same, on a grid aligned with the ramp shock |
 | `cylinder_m6_implicit` | `cyl.su2` | Mach 6 inviscid flow over a cylinder (bow shock), implicit |
+| `cylinder_m6_gmsh` | `cyl_gmsh.su2` | Same, on an unstructured triangle mesh from Gmsh (generate it first, see Meshes) |
 | `shock_tube` | `block.su2` | Shock tube in a closed box (gas at rest, lower half at 2x pressure and density) |
 | `plate_viscous_implicit` | `plate.su2` | Mach 1.5 laminar flat plate, implicit |
 | `plate_viscous_explicit` | `plate.su2` | Same, explicit (slow: the time step is set by the near-wall viscous limit) |
@@ -96,10 +97,10 @@ The input file is read with list-directed reads, so anything after the values
 on a line is treated as a comment.
 
 ```
-0 1 1              !ivisc, impl, cfl_ramp
+0 1 1 0 1          !ivisc, impl, cfl_ramp, lts, sensor (last two optional)
 1000.0 0.0071 6.0  !p_inf rho_inf M_inf
 2001 500           !iterations, save interval
-0.4d0              !CFL
+0.4d0 100 0.2      !CFL, maximum CFL (optional), eps_lhs (optional)
 3                  !number of boundary markers
 farfield 1         !marker name, BC type
 outlet   2
@@ -112,10 +113,14 @@ wall     3
 | 1 | `ivisc` | 0 = inviscid (Euler). 1 = viscous (full Navier–Stokes; viscosity from Sutherland's law at the freestream temperature, held constant; Pr = 0.7) |
 |   | `impl` | 0 = explicit, 1 = implicit (point Jacobi, `kmax`+1 = 10 sweeps, set in `src/util.f90`) |
 |   | `cfl_ramp` | 0 = constant CFL, 1 = built-in CFL ramp (see below) |
+|   | `lts` | Optional. 0 = one global time step (default; needed for time-accurate runs such as the shock tube), 1 = local time stepping: every cell uses its own largest stable step. Much faster convergence to a steady state; the printed physical time is then meaningless |
+|   | `sensor` | Optional. 1 = cell-based shock sensor for the MSW blending (default), 0 = off. With it on, every face of a cell in a shock gets the full Steger–Warming dissipation, not only the faces that see the pressure jump; this stops the bow shock developing a carbuncle on irregular triangle meshes. Smooth regions (boundary layers included) are unaffected. Needs `lts` to be given too |
 | 2 | `p_inf rho_inf M_inf` | Freestream pressure [Pa], density [kg/m^3] and Mach number. The flow is in +x |
 | 3 | `iter` | Number of iterations |
 |   | `isave` | Write `data.vtk` every `isave` iterations (it is also written at the end of the run) |
 | 4 | `CFL` | CFL number (starting value if the ramp is on) |
+|   | `cfl_max` | Optional. Upper limit on the CFL number, which also caps the ramp (default: no limit) |
+|   | `eps_lhs` | Optional. Eigenvalue limiter in the implicit Jacobians, as a fraction of the local \|u·n\| + a (default 0.2). Larger values make the implicit scheme more robust at high CFL near strong shocks, at some cost in convergence speed; it does not change the converged solution |
 | 5 | `nbc` | Number of boundary-condition lines that follow |
 | 6.. | `name type` | One line per mesh marker: the marker name from the `.su2` file and its BC type. Every marker in the mesh needs a line |
 | last | `switch` | Initial condition: 1 = uniform freestream; 2 = shock tube (gas at rest, cells below the middle of the mesh's y range at 2x p and rho); 3 = freestream with a 1% bump in the cells at the middle of the x range |
@@ -154,6 +159,18 @@ tools/structured2su2.py grids/plate.dat grids/plate.su2 \
 become one marker); `--split SIDE:NODE:BEFORE:AFTER` splits a side into two
 markers at a node index; `--triangulate` splits every quad into two triangles
 (`tools/convert_grids.sh` also writes `cyl_tri.su2` this way, for testing).
+
+`grids/cyl_gmsh.geo` is a Gmsh script for the cylinder domain as a fully
+unstructured triangle mesh, with the markers `wall`, `farfield` and
+`outlet`:
+
+```
+gmsh -2 grids/cyl_gmsh.geo -format su2 -o grids/cyl_gmsh.su2
+```
+
+Any Gmsh mesh works the same way: name the boundaries with physical curves
+(these become the SU2 markers), add a physical surface for the domain, and
+export with `-format su2`.
 
 ## Output
 

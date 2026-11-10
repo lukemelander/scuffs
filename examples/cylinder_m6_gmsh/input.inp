@@ -1,0 +1,9 @@
+0 1 1 1 1          !ivisc, impl, cfl_ramp, lts, sensor
+1000.0 0.0071 6.0  !p_inf rho_inf M_inf
+1501 500           !iterations, save interval
+0.4d0              !CFL (start of the ramp)
+3                  !number of boundary markers
+farfield 1         !marker name, BC type (1 inflow 2 outflow 3 slip wall 4 mirror 5 adiabatic wall)
+outlet   2
+wall     3
+1                  !initial condition (1 freestream, 2 shock tube, 3 perturbed freestream)
