@@ -665,6 +665,9 @@ contains
         Ca(4,:) = (/0.0d0,-Vave(1)*a,0.0d0,1.0d0/)
         !Rotation into the face frame
         up = cosa*Vave(2) + sina*Vave(3)
+        !Implicit Jacobians (pass 2) use a much larger limiter, a fraction
+        !of the local spectral radius, for stability at high CFL
+        if(ipass == 2) eps = eps_lhs*(abs(up) + a)*da
         Rainv(1,:) = (/1.0d0,0.0d0,0.0d0,0.0d0/)
         Rainv(2,:) = (/0.0d0,cosa,-sina,0.0d0/)
         Rainv(3,:) = (/0.0d0,sina,cosa,0.0d0/)

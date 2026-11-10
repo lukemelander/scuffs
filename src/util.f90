@@ -20,6 +20,12 @@ real*8, parameter :: cv = (5.0d0/2.0d0)*Rair
 !Implicit solver: kmax+1 point-Jacobi sweeps per iteration
 !(10 sweeps needed for stability at CFL ~50-100)
 integer, parameter :: kmax = 9
+!Eigenvalue limiter for the implicit Jacobians only (pass 2 of the MSW
+!routine): |lambda| >= eps_lhs*(|u_n| + a) on the left-hand side. Extra
+!dissipation there keeps the implicit scheme stable at high CFL near
+!shocks without changing the converged solution (the flux keeps the small
+!limiter). Raise towards 0.25-0.5 if a case still goes unstable.
+real*8, parameter :: eps_lhs = 0.2d0
 
 !Boundary-condition types
 integer, parameter :: BC_INFLOW = 1, BC_OUTFLOW = 2, BC_SLIPWALL = 3
